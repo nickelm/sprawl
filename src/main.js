@@ -101,6 +101,7 @@ document.addEventListener('keydown', e => {
   }
 });
 
+
 // Initial chunk generation (renders city before game starts)
 updateChunks();
 requestAnimationFrame(gameLoop);

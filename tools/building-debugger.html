@@ -251,6 +251,7 @@
       <label class="toggle-item"><input type="checkbox" data-toggle="roomLabels" checked> Room Labels</label>
       <label class="toggle-item"><input type="checkbox" data-toggle="gridLines"> Grid Lines</label>
       <label class="toggle-item"><input type="checkbox" data-toggle="stairs"> Stairs</label>
+      <label class="toggle-item"><input type="checkbox" id="toggle-roof" checked> Roof</label>
     </div>
   </div>
 
@@ -288,7 +289,7 @@
 <script type="module">
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls';
-import { generateBuilding, instantiateBuilding, PANEL_TYPES } from '../src/buildings.js';
+import { generateBuilding, instantiateBuilding, PANEL_TYPES, setRoofVisible } from '../src/buildings.js';
 import { seededRNG } from '../src/utils.js';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -1013,6 +1014,10 @@ document.getElementById('btn-copy-seed').addEventListener('click', () => {
 });
 
 document.getElementById('btn-dump-json').addEventListener('click', downloadJSON);
+
+document.getElementById('toggle-roof').addEventListener('change', e => {
+  setRoofVisible(e.target.checked);
+});
 
 // Hover tooltip
 planCanvas.addEventListener('mousemove', e => {

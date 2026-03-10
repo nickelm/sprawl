@@ -25,17 +25,17 @@ const ARCHETYPE_CFG = {
   dwelling: {
     minW: 6, maxW: 10, minD: 8, maxD: 12,
     minFloors: 1, maxFloors: 2, floorH: 3,
-    minRoom: 2,
+    minRoom: 3,
     shape: 'rect_or_l',      // 60% L-shape
-    style: { extWall: 'brick', intWall: 'wood', floorMat: 'wood', windowDensity: 0.5 },
+    style: { extWall: 'brick', intWall: 'wood', floorMat: 'wood', windowDensity: 0.9 },
   },
   apartment: {
     minW: 10, maxW: 15, minD: 15, maxD: 25,
     minFloors: 3, maxFloors: 6, floorH: 3,
-    minRoom: 2,
+    minRoom: 3,
     shape: 'rect_or_u',     // 50% U-shape
     hasCorridor: true,
-    style: { extWall: 'concrete', intWall: 'wood', floorMat: 'concrete', windowDensity: 0.6 },
+    style: { extWall: 'concrete', intWall: 'wood', floorMat: 'concrete', windowDensity: 0.9 },
   },
   office: {
     minW: 12, maxW: 20, minD: 12, maxD: 20,
@@ -43,7 +43,7 @@ const ARCHETYPE_CFG = {
     minRoom: 3,
     shape: 'rect_or_t',     // 50% T-shape
     hasCorridor: true,
-    style: { extWall: 'concrete', intWall: 'wood', floorMat: 'concrete', windowDensity: 0.82 },
+    style: { extWall: 'concrete', intWall: 'wood', floorMat: 'concrete', windowDensity: 1.0 },
   },
   strip_mall: {
     minW: 8, maxW: 15, minD: 6, maxD: 10,
@@ -105,8 +105,22 @@ function getPanelMat(typeName) {
 
 // ─── Geometry helpers ─────────────────────────────────────────────────────────
 
-// Slab: ±Y faces only. Side faces omitted — they're always hidden by wall panels
-// and would z-fight at seams between adjacent merged rectangles.
+// Full 6-face solid box (non-indexed, correct CCW winding). Used for props.
+function solidBoxVerts(cx, cy, cz, w, h, d) {
+  const hx=w*0.5, hy=h*0.5, hz=d*0.5;
+  const x0=cx-hx, x1=cx+hx, y0=cy-hy, y1=cy+hy, z0=cz-hz, z1=cz+hz;
+  return [
+    x0,y1,z0, x0,y1,z1, x1,y1,z1,  x0,y1,z0, x1,y1,z1, x1,y1,z0, // +Y
+    x0,y0,z1, x0,y0,z0, x1,y0,z0,  x0,y0,z1, x1,y0,z0, x1,y0,z1, // -Y
+    x0,y0,z1, x1,y0,z1, x1,y1,z1,  x0,y0,z1, x1,y1,z1, x0,y1,z1, // +Z
+    x1,y0,z0, x0,y0,z0, x0,y1,z0,  x1,y0,z0, x0,y1,z0, x1,y1,z0, // -Z
+    x1,y0,z0, x1,y1,z0, x1,y1,z1,  x1,y0,z0, x1,y1,z1, x1,y0,z1, // +X
+    x0,y0,z1, x0,y1,z1, x0,y1,z0,  x0,y0,z1, x0,y1,z0, x0,y0,z0, // -X
+  ];
+}
+
+// Slab: ±Y faces only. Side faces are emitted separately at open/door edges (see slabEdgeFaceVerts).
+// Adjacent merged slab seams don't need sides — wall panels cover them.
 function slabVerts(cx, cy, cz, w, h, d) {
   const hx=w*0.5, hy=h*0.5, hz=d*0.5;
   const x0=cx-hx, x1=cx+hx, y0=cy-hy, y1=cy+hy, z0=cz-hz, z1=cz+hz;
@@ -123,6 +137,21 @@ function topSlabVerts(cx, cy, cz, w, h, d) {
   return [
     x0,y1,z0, x0,y1,z1, x1,y1,z1,  x0,y1,z0, x1,y1,z1, x1,y1,z0, // +Y
   ];
+}
+
+// Vertical slab edge face: one cell-width strip, used for door frame reveals and open-edge sides.
+// axis 'x': edge at x=ex spanning z=[ea,eb]; axis 'z': edge at z=ex spanning x=[ea,eb].
+// dir +1 → normal points +X or +Z; dir -1 → normal points -X or -Z.
+function slabEdgeFaceVerts(ex, y0, y1, ea, eb, axis, dir) {
+  if (axis === 'x') {
+    return dir > 0
+      ? [ex,y0,ea, ex,y1,ea, ex,y1,eb,  ex,y0,ea, ex,y1,eb, ex,y0,eb]  // normal +X
+      : [ex,y0,eb, ex,y1,eb, ex,y1,ea,  ex,y0,eb, ex,y1,ea, ex,y0,ea]; // normal -X
+  } else {
+    return dir > 0
+      ? [eb,y0,ex, eb,y1,ex, ea,y1,ex,  eb,y0,ex, ea,y1,ex, ea,y0,ex]  // normal +Z
+      : [ea,y0,ex, ea,y1,ex, eb,y1,ex,  ea,y0,ex, eb,y1,ex, eb,y0,ex]; // normal -Z
+  }
 }
 
 // Single-face helpers for per-side material assignment on wall panels
@@ -147,30 +176,32 @@ function vFaceMX(cx, cy, cz, w, h, d) { // v-wall face toward -X (faces 'left' c
   return [x0,y0,z1, x0,y1,z1, x0,y1,z0,  x0,y0,z1, x0,y1,z0, x0,y0,z0];
 }
 
-// 4 edge faces for a horizontal-wall panel (thickness in Z = 0.1m, width in X = 1m).
-// cx,cy,cz = panel center. Returns 24 verts (4 faces × 6 verts).
-function hPanelEdges(cx, cy, cz, panelH) {
+// Edge faces for a horizontal-wall panel (thickness in Z = 0.1m, width in X = 1m).
+// Only emits faces where the adjacent cell is empty (spec §3).
+// hasLeft/Right: adjacent panel in same row; hasTop/Bot: adjacent panel row above/below.
+function hPanelEdgesFiltered(cx, cy, cz, panelH, hasLeft, hasRight, hasTop, hasBot) {
   const hx=0.5, hy=panelH*0.5, hz=0.05;
   const x0=cx-hx, x1=cx+hx, y0=cy-hy, y1=cy+hy, z0=cz-hz, z1=cz+hz;
-  return [
-    x0,y0,z0, x0,y0,z1, x0,y1,z1,  x0,y0,z0, x0,y1,z1, x0,y1,z0, // left  (-X)
-    x1,y0,z1, x1,y0,z0, x1,y1,z0,  x1,y0,z1, x1,y1,z0, x1,y1,z1, // right (+X)
-    x0,y1,z0, x0,y1,z1, x1,y1,z1,  x0,y1,z0, x1,y1,z1, x1,y1,z0, // top   (+Y)
-    x0,y0,z1, x0,y0,z0, x1,y0,z0,  x0,y0,z1, x1,y0,z0, x1,y0,z1, // bot   (-Y)
-  ];
+  const out = [];
+  if (!hasLeft)  out.push(x0,y0,z0, x0,y0,z1, x0,y1,z1,  x0,y0,z0, x0,y1,z1, x0,y1,z0); // left  (-X)
+  if (!hasRight) out.push(x1,y0,z1, x1,y0,z0, x1,y1,z0,  x1,y0,z1, x1,y1,z0, x1,y1,z1); // right (+X)
+  if (!hasTop)   out.push(x0,y1,z0, x0,y1,z1, x1,y1,z1,  x0,y1,z0, x1,y1,z1, x1,y1,z0); // top   (+Y)
+  if (!hasBot)   out.push(x0,y0,z1, x0,y0,z0, x1,y0,z0,  x0,y0,z1, x1,y0,z0, x1,y0,z1); // bot   (-Y)
+  return out;
 }
 
-// 4 edge faces for a vertical-wall panel (thickness in X = 0.1m, depth in Z = 1m).
-// cx,cy,cz = panel center. Returns 24 verts.
-function vPanelEdges(cx, cy, cz, panelH) {
+// Edge faces for a vertical-wall panel (thickness in X = 0.1m, depth in Z = 1m).
+// Only emits faces where the adjacent cell is empty (spec §3).
+// hasFront/Back: adjacent panel in same column; hasTop/Bot: adjacent panel row above/below.
+function vPanelEdgesFiltered(cx, cy, cz, panelH, hasFront, hasBack, hasTop, hasBot) {
   const hx=0.05, hy=panelH*0.5, hz=0.5;
   const x0=cx-hx, x1=cx+hx, y0=cy-hy, y1=cy+hy, z0=cz-hz, z1=cz+hz;
-  return [
-    x1,y0,z0, x0,y0,z0, x0,y1,z0,  x1,y0,z0, x0,y1,z0, x1,y1,z0, // front (-Z)
-    x0,y0,z1, x1,y0,z1, x1,y1,z1,  x0,y0,z1, x1,y1,z1, x0,y1,z1, // back  (+Z)
-    x0,y1,z0, x1,y1,z0, x1,y1,z1,  x0,y1,z0, x1,y1,z1, x0,y1,z1, // top   (+Y)
-    x0,y0,z1, x1,y0,z1, x1,y0,z0,  x0,y0,z1, x1,y0,z0, x0,y0,z0, // bot   (-Y)
-  ];
+  const out = [];
+  if (!hasFront) out.push(x1,y0,z0, x0,y0,z0, x0,y1,z0,  x1,y0,z0, x0,y1,z0, x1,y1,z0); // front (-Z)
+  if (!hasBack)  out.push(x0,y0,z1, x1,y0,z1, x1,y1,z1,  x0,y0,z1, x1,y1,z1, x0,y1,z1); // back  (+Z)
+  if (!hasTop)   out.push(x0,y1,z0, x0,y1,z1, x1,y1,z1,  x0,y1,z0, x1,y1,z1, x1,y1,z0); // top   (+Y)
+  if (!hasBot)   out.push(x0,y0,z1, x0,y0,z0, x1,y0,z0,  x0,y0,z1, x1,y0,z0, x1,y0,z1); // bot   (-Y)
+  return out;
 }
 
 function buildMesh(arr, mat) {
@@ -436,23 +467,42 @@ function placeDoors(floorplan, rooms, rng, isGround) {
     }
   }
 
+  // Returns true if this wall segment is at a corner-extension column and should
+  // not receive a door or window.
+  function isTerminal(seg) {
+    if (seg.axis === 'h') {
+      const atL = (seg.z > 0 && walls.v[seg.x]?.[seg.z - 1])    || (seg.z < depth && walls.v[seg.x]?.[seg.z]);
+      const atR = (seg.z > 0 && walls.v[seg.x+1]?.[seg.z - 1])  || (seg.z < depth && walls.v[seg.x+1]?.[seg.z]);
+      return atL || atR;
+    } else {
+      const atB = (seg.x > 0 && walls.h[seg.x-1]?.[seg.z])   || (seg.x < width && walls.h[seg.x]?.[seg.z]);
+      const atT = (seg.x > 0 && walls.h[seg.x-1]?.[seg.z+1]) || (seg.x < width && walls.h[seg.x]?.[seg.z+1]);
+      return atB || atT;
+    }
+  }
+
+  function pickNonTerminal(segs) {
+    const valid = segs.filter(s => !isTerminal(s));
+    const pool = valid.length > 0 ? valid : segs; // fall back to any seg if all are terminal
+    return pool[Math.floor(rng() * pool.length)];
+  }
+
   function addDoor(seg) {
     const k = dKey(seg.axis, seg.x, seg.z);
     doors.add(k);
-    if (seg.axis === 'h') walls.h[seg.x][seg.z] = 0;
-    else                  walls.v[seg.x][seg.z]  = 0;
+    // Wall bit stays set — the panel loop uses isDoor + DOOR_H to create the gap,
+    // leaving one solid lintel panel above the opening.
   }
 
   // One door per MST edge
   for (const edge of mstEdges) {
-    const seg = edge.segs[Math.floor(rng() * edge.segs.length)];
-    addDoor(seg);
+    addDoor(pickNonTerminal(edge.segs));
   }
 
   // 30% extra doors per non-MST edge (creates loops)
   for (const edge of shuffled) {
     if (!mstEdges.has(edge) && rng() < 0.3) {
-      const seg = edge.segs[Math.floor(rng() * edge.segs.length)];
+      const seg = pickNonTerminal(edge.segs);
       const k = dKey(seg.axis, seg.x, seg.z);
       if (!doors.has(k)) addDoor(seg);
     }
@@ -468,7 +518,7 @@ function placeDoors(floorplan, rooms, rng, isGround) {
       for (let z = 0; z < depth; z++)
         if (walls.v[0]?.[z]) southSegs.push({ axis: 'v', x: 0, z });
     if (southSegs.length > 0)
-      addDoor(southSegs[Math.floor(rng() * southSegs.length)]);
+      addDoor(pickNonTerminal(southSegs));
   }
 }
 
@@ -493,7 +543,7 @@ function placeWindows(floorplan, archetype, windowDensity, floorIdx, rng) {
       // Archetype rules
       if (archetype === 'warehouse' && floorIdx === 0) continue;
       let density = windowDensity;
-      if (archetype === 'strip_mall') density = (z === 0 || z === depth) ? 0.85 : 0.08;
+      if (archetype === 'strip_mall') density = z === 0 ? 1.0 : 0.08;
       if (rng() < density) windows.add(k);
     }
   }
@@ -769,25 +819,10 @@ function addWarehouseCatwalk(group, buildingDef, wx, wy, wz) {
 let _buildingId = 0;
 let _panelId    = 0;
 
-// Returns 0.05m extension amounts for an h-wall segment at (x, z).
-// leftExt: extend left face (−X) if a perpendicular v-wall meets the left endpoint.
-// rightExt: extend right face (+X) if a perpendicular v-wall meets the right endpoint.
-function hWallExtensions(walls, x, z, width, depth) {
-  const v = walls.v;
-  const leftPerp  = (z > 0 && v[x]?.[z - 1]) || (z < depth && v[x]?.[z]);
-  const rightPerp = (z > 0 && v[x + 1]?.[z - 1]) || (z < depth && v[x + 1]?.[z]);
-  return { leftExt: leftPerp ? 0.05 : 0, rightExt: rightPerp ? 0.05 : 0 };
-}
+// ── Roof mesh registry (for debug toggling) ───────────────────────────────────
+const _roofMeshes = [];
+export function setRoofVisible(v) { for (const m of _roofMeshes) m.visible = v; }
 
-// Returns 0.05m extension amounts for a v-wall segment at (x, z).
-// botExt: extend bottom face (−Z) if a perpendicular h-wall meets the bottom endpoint.
-// topExt: extend top face (+Z) if a perpendicular h-wall meets the top endpoint.
-function vWallExtensions(walls, x, z, width, depth) {
-  const h = walls.h;
-  const botPerp = (x > 0 && h[x - 1]?.[z]) || (x < width && h[x]?.[z]);
-  const topPerp = (x > 0 && h[x - 1]?.[z + 1]) || (x < width && h[x]?.[z + 1]);
-  return { botExt: botPerp ? 0.05 : 0, topExt: topPerp ? 0.05 : 0 };
-}
 
 const MAX_PANELS = 5000;
 
@@ -832,10 +867,11 @@ export function instantiateBuilding(buildingDef, wx, wy, wz) {
     const verts = {}; // typeName → number[]
     function getArr(t) { if (!verts[t]) verts[t] = []; return verts[t]; }
 
-    // Slab panels (floor / ceiling)
-    function addPanel(typeName, cx, cy, cz, pw, ph, pd, gridX, gridY, wallId, faceType) {
+    // Slab panels (floor / ceiling).
+    // arrFn defaults to getArr; pass getRoofArr to route panels into the roof mesh.
+    function addPanel(typeName, cx, cy, cz, pw, ph, pd, gridX, gridY, wallId, faceType, arrFn = getArr) {
       if (panelCount >= MAX_PANELS) return;
-      const arr = getArr(typeName);
+      const arr = arrFn(typeName);
       const vertexStart = arr.length / 3;
       const v = faceType === 'st' ? topSlabVerts(cx, cy, cz, pw, ph, pd)
               :                     slabVerts(cx, cy, cz, pw, ph, pd);
@@ -851,6 +887,20 @@ export function instantiateBuilding(buildingDef, wx, wy, wz) {
       panelCount++;
     }
 
+    // ── Slab boundary helpers ─────────────────────────────────────────────
+    // Slabs sit exactly on their grid cells. Wall panel edge faces seal the wall-slab
+    // junction; open-edge reveals are handled by addOpenEdgeFaces below.
+    function slabExtents(rx, rz, rw, rd) {
+      return { sx0: wx + rx, sx1: wx + rx + rw, sz0: wz + rz, sz1: wz + rz + rd };
+    }
+    // addSlabEdgeFaces: vertical slab-edge cap faces along the full perimeter of a merged rect.
+    function addSlabEdgeFaces(range, edgePos, axis, dir, y0, y1) {
+      for (const gi of range) {
+        const ea = axis === 'x' ? wz + gi : wx + gi;
+        getArr('concrete').push(...slabEdgeFaceVerts(edgePos, y0, y1, ea, ea + 1, axis, dir));
+      }
+    }
+
     // ── Floor slab (merged rectangles, ground floor top-face only) ───────
     {
       const mask = Array.from({ length: width }, (_, mx) => {
@@ -859,24 +909,26 @@ export function instantiateBuilding(buildingDef, wx, wy, wz) {
           if (grid[mx][z] && !(f > 0 && grid[mx][z] === 3)) row[z] = 1;
         return row;
       });
+      const y0 = floorY - slabThick*0.5, y1 = floorY + slabThick*0.5;
       for (const [rx, rz, rw, rd] of mergeSlabs(mask, width, depth)) {
-        const inset = slabThick * 0.5; // 0.05m — half wall thickness
-        const hasMinX = walls.v[rx]?.slice(rz, rz + rd).some(Boolean) ?? false;
-        const hasMaxX = walls.v[rx + rw]?.slice(rz, rz + rd).some(Boolean) ?? false;
-        const hasMinZ = Array.from({ length: rw }, (_, i) => walls.h[rx + i]?.[rz]).some(Boolean);
-        const hasMaxZ = Array.from({ length: rw }, (_, i) => walls.h[rx + i]?.[rz + rd]).some(Boolean);
-        const sx0 = wx + rx      - (hasMinX ? inset : 0);
-        const sx1 = wx + rx + rw + (hasMaxX ? inset : 0);
-        const sz0 = wz + rz      - (hasMinZ ? inset : 0);
-        const sz1 = wz + rz + rd + (hasMaxZ ? inset : 0);
+        const { sx0, sx1, sz0, sz1 } = slabExtents(rx, rz, rw, rd);
         addPanel('concrete',
-          (sx0 + sx1) * 0.5, floorY + slabThick * 0.5, (sz0 + sz1) * 0.5,
-          sx1 - sx0, slabThick, sz1 - sz0, rx, f * 100, -1, f === 0 ? 'st' : 's');
+          (sx0+sx1)*0.5, floorY, (sz0+sz1)*0.5,
+          sx1-sx0, slabThick, sz1-sz0, rx, f*100, -1, f===0 ? 'st' : 's');
+        const zR = Array.from({length: rd}, (_, i) => rz+i);
+        const xR = Array.from({length: rw}, (_, i) => rx+i);
+        addSlabEdgeFaces(zR, sx0, 'x',-1, y0,y1);
+        addSlabEdgeFaces(zR, sx1, 'x',+1, y0,y1);
+        addSlabEdgeFaces(xR, sz0, 'z',-1, y0,y1);
+        addSlabEdgeFaces(xR, sz1, 'z',+1, y0,y1);
       }
     }
 
     // ── Ceiling slab (merged rectangles) ──────────────────────────────────
     const isTopFloor = f === floors.length - 1;
+    // Top-floor ceiling = roof: routed into a separate mesh for debug toggling.
+    const roofVerts = {};
+    function getRoofArr(t) { if (!roofVerts[t]) roofVerts[t] = []; return roofVerts[t]; }
     {
       const mask = Array.from({ length: width }, (_, mx) => {
         const row = new Uint8Array(depth);
@@ -887,30 +939,34 @@ export function instantiateBuilding(buildingDef, wx, wy, wz) {
         }
         return row;
       });
+      const ceilY = floorY + heightPerFloor;
+      const y0 = ceilY - slabThick*0.5, y1 = ceilY + slabThick*0.5;
       for (const [rx, rz, rw, rd] of mergeSlabs(mask, width, depth)) {
-        const inset = slabThick * 0.5;
-        const hasMinX = walls.v[rx]?.slice(rz, rz + rd).some(Boolean) ?? false;
-        const hasMaxX = walls.v[rx + rw]?.slice(rz, rz + rd).some(Boolean) ?? false;
-        const hasMinZ = Array.from({ length: rw }, (_, i) => walls.h[rx + i]?.[rz]).some(Boolean);
-        const hasMaxZ = Array.from({ length: rw }, (_, i) => walls.h[rx + i]?.[rz + rd]).some(Boolean);
-        const sx0 = wx + rx      - (hasMinX ? inset : 0);
-        const sx1 = wx + rx + rw + (hasMaxX ? inset : 0);
-        const sz0 = wz + rz      - (hasMinZ ? inset : 0);
-        const sz1 = wz + rz + rd + (hasMaxZ ? inset : 0);
+        const { sx0, sx1, sz0, sz1 } = slabExtents(rx, rz, rw, rd);
         addPanel('concrete',
-          (sx0 + sx1) * 0.5, floorY + heightPerFloor - slabThick * 0.5, (sz0 + sz1) * 0.5,
-          sx1 - sx0, slabThick, sz1 - sz0, rx, f * 100 + 99, -1, 's');
+          (sx0+sx1)*0.5, ceilY, (sz0+sz1)*0.5,
+          sx1-sx0, slabThick, sz1-sz0, rx, f*100+99, -1, 's',
+          isTopFloor ? getRoofArr : getArr);
+        const zR = Array.from({length: rd}, (_, i) => rz+i);
+        const xR = Array.from({length: rw}, (_, i) => rx+i);
+        addSlabEdgeFaces(zR, sx0, 'x',-1, y0,y1);
+        addSlabEdgeFaces(zR, sx1, 'x',+1, y0,y1);
+        addSlabEdgeFaces(xR, sz0, 'z',-1, y0,y1);
+        addSlabEdgeFaces(xR, sz1, 'z',+1, y0,y1);
       }
     }
 
-    // Clear height between slabs (for walls)
-    const clearH   = heightPerFloor - slabThick;  // wall extends from floor surface to ceiling top
-    const wallRows  = Math.ceil(clearH);               // panels per wall segment
-    const panelH   = clearH / wallRows;                // height of each panel
+    // Walls span full floor height: bottom of floor slab to bottom of ceiling slab.
+    // Slab centered on grid line → wall spans [floorY - slabThick*0.5, ceilY - slabThick*0.5].
+    const clearH  = heightPerFloor;
+    const wallRows = Math.ceil(clearH);
+    const panelH  = clearH / wallRows;
 
-    // Door opening height and window band (metres above floor surface)
+    // Door/window heights measured from floor surface (floorY + slabThick*0.5 = relY slabThick from wall bottom).
     const DOOR_H  = 2.0;
     const WIN_BOT = 0.9, WIN_TOP = 2.1;
+    const DOOR_TOP = slabThick + DOOR_H;
+    const WIN_BOT_R = slabThick + WIN_BOT, WIN_TOP_R = slabThick + WIN_TOP;
 
     // ── Horizontal wall panels (h[x][z]) ──────────────────────────────────
     // walls.h[x][z] separates cell (x, z-1) [below] from cell (x, z) [above].
@@ -922,29 +978,44 @@ export function instantiateBuilding(buildingDef, wx, wy, wz) {
       const intMat = buildingDef.style.intWall;
       for (let p = 0; p < wallRows; p++) {
         const relY = panelH * p + panelH * 0.5;
-        const cy   = floorY + slabThick + relY;
+        const cy   = floorY - slabThick * 0.5 + relY;
 
-        // Collect active segments for this (z, p) row
-        const segs = []; // { x, matPZ, matMZ, hShift, leftExt, rightExt }
+        // Collect active segments for this (z, p) row — two passes.
+        // Pass 1: geometry data (no glass decision yet — needs neighbor corner info).
+        const rawH = [];
         for (let x = 0; x < width; x++) {
           if (!walls.h[x][z]) continue;
           const below = z > 0     ? grid[x][z - 1] : 0;
           const above = z < depth ? grid[x][z]     : 0;
           if (below === 0 && above === 0) continue;
-          const isDoor  = doors.has(dKey('h', x, z));
-          if (isDoor && relY < DOOR_H) continue;  // door gap — skip this panel row
-          const isExt   = (below === 0 || above === 0);
-          const isWin   = windows.has(dKey('h', x, z));
-          const isGlass = isWin && relY >= WIN_BOT && relY <= WIN_TOP;
-          const hShift  = isExt ? (below === 0 ? -slabThick * 0.5 : slabThick * 0.5) : 0;
-          const { leftExt, rightExt } = hWallExtensions(walls, x, z, width, depth);
-          segs.push({
-            x,
-            matPZ: isGlass ? 'glass' : ((above === 0) ? extMat : intMat),
-            matMZ: isGlass ? 'glass' : ((below === 0) ? extMat : intMat),
-            hShift, leftExt, rightExt,
-          });
+          const isDoor = doors.has(dKey('h', x, z));
+          if (isDoor && relY < DOOR_TOP) continue;
+          const isExt  = (below === 0 || above === 0);
+          const hShift = isExt ? (below === 0 ? -slabThick * 0.5 : slabThick * 0.5) : 0;
+          const hasLeftPerp  = !!(  (z > 0 && walls.v[x]?.[z - 1])     || (z < depth && walls.v[x]?.[z])   );
+          const hasRightPerp = !!(  (z > 0 && walls.v[x + 1]?.[z - 1]) || (z < depth && walls.v[x + 1]?.[z]));
+          rawH.push({ x, below, above, hShift, hasLeftPerp, hasRightPerp,
+                      isWin: windows.has(dKey('h', x, z)) });
         }
+        // Pass 2: resolve glass, suppressing it at and immediately adjacent to corners.
+        const isStorefrontRow = archetype === 'strip_mall' && z === 0;
+        const segs = rawH.map((seg, si) => {
+          const atCorner   = seg.hasLeftPerp || seg.hasRightPerp;
+          const prevCorner = si > 0 && rawH[si-1].x === seg.x - 1 && rawH[si-1].hasRightPerp;
+          const nextCorner = si < rawH.length - 1 && rawH[si+1].x === seg.x + 1 && rawH[si+1].hasLeftPerp;
+          const noCorner   = !atCorner && !prevCorner && !nextCorner;
+          // Storefront: full-height glass on the front face of strip malls (except corners).
+          // Office/regular windows: glass only in the window band.
+          const isGlass = noCorner && (
+            isStorefrontRow ||
+            (seg.isWin && (archetype === 'office' || (relY >= WIN_BOT_R && relY <= WIN_TOP_R)))
+          );
+          return {
+            x: seg.x, hShift: seg.hShift, hasLeftPerp: seg.hasLeftPerp, hasRightPerp: seg.hasRightPerp,
+            matPZ: isGlass ? 'glass' : ((seg.above === 0) ? extMat : intMat),
+            matMZ: isGlass ? 'glass' : ((seg.below === 0) ? extMat : intMat),
+          };
+        });
 
         // Emit merged quads for each face direction independently.
         // A run breaks when: x is non-consecutive, material changes, or hShift changes.
@@ -958,10 +1029,9 @@ export function instantiateBuilding(buildingDef, wx, wy, wz) {
                    segs[j + 1].x === segs[j].x + 1 &&
                    segs[j + 1][matKey] === segs[j][matKey] &&
                    segs[j + 1].hShift === segs[j].hShift) { j++; }
-            // Merged quad spans [segs[i].x .. segs[j].x].
-            // Terminal extensions apply only to the actual run endpoints.
-            const leftX  = wx + segs[i].x - segs[i].leftExt;
-            const rightX = wx + segs[j].x + 1 + segs[j].rightExt;
+            // Merged quad spans [segs[i].x .. segs[j].x]. Panels sit exactly on grid (spec §2).
+            const leftX  = wx + segs[i].x;
+            const rightX = wx + segs[j].x + 1;
             const hw     = rightX - leftX;
             const cx     = (leftX + rightX) * 0.5;
             const cz     = wz + z + segs[i].hShift;
@@ -970,20 +1040,26 @@ export function instantiateBuilding(buildingDef, wx, wy, wz) {
           }
         }
 
-        // Register individual panels + emit 4 edge faces (Option A: always emit)
-        for (const seg of segs) {
+        // Register individual panels + emit edge faces (culled per spec §3).
+        for (let si = 0; si < segs.length; si++) {
           if (panelCount >= MAX_PANELS) break;
+          const seg  = segs[si];
           const rMat = seg.matPZ;
           const def  = PANEL_TYPES[rMat] ?? PANEL_TYPES.concrete;
           const arr  = getArr(rMat);
           const pcx  = wx + seg.x + 0.5;
           const pcz  = wz + z + seg.hShift;
+          const hasLeft  = si > 0 && segs[si - 1].x === seg.x - 1;
+          const hasRight = si < segs.length - 1 && segs[si + 1].x === seg.x + 1;
+          const hasTop   = true; // slab/roof covers all tops — no cap to prevent Z-fighting
+          const hasBot   = true; // slab/foundation covers all bottoms
+          const edgeVerts = hPanelEdgesFiltered(pcx, cy, pcz, panelH, hasLeft, hasRight, hasTop, hasBot);
           const vertexStart = arr.length / 3;
-          arr.push(...hPanelEdges(pcx, cy, pcz, panelH));
+          arr.push(...edgeVerts);
           registerPanel({
             id: _panelId++, type: rMat, hp: def.hp, maxHp: def.hp,
             gridX: seg.x, gridY: f * 10 + p, wallId: z * 10000 + seg.x, buildingId,
-            vertexStart, vertexCount: 24, penetrationCost: def.pen, isSupported: true,
+            vertexStart, vertexCount: edgeVerts.length / 3, penetrationCost: def.pen, isSupported: true,
           });
           panelCount++;
         }
@@ -1000,28 +1076,37 @@ export function instantiateBuilding(buildingDef, wx, wy, wz) {
       const intMat = buildingDef.style.intWall;
       for (let p = 0; p < wallRows; p++) {
         const relY = panelH * p + panelH * 0.5;
-        const cy   = floorY + slabThick + relY;
+        const cy   = floorY - slabThick * 0.5 + relY;
 
-        const segs = []; // { z, matPX, matMX, vShift, botExt, topExt }
+        // Pass 1
+        const rawV = [];
         for (let z = 0; z < depth; z++) {
           if (!walls.v[x][z]) continue;
           const left  = x > 0     ? grid[x - 1][z] : 0;
           const right = x < width ? grid[x][z]     : 0;
           if (left === 0 && right === 0) continue;
-          const isDoor  = doors.has(dKey('v', x, z));
-          if (isDoor && relY < DOOR_H) continue;
-          const isExt   = (left === 0 || right === 0);
-          const isWin   = windows.has(dKey('v', x, z));
-          const isGlass = isWin && relY >= WIN_BOT && relY <= WIN_TOP;
-          const vShift  = isExt ? (left === 0 ? -slabThick * 0.5 : slabThick * 0.5) : 0;
-          const { botExt, topExt } = vWallExtensions(walls, x, z, width, depth);
-          segs.push({
-            z,
-            matPX: isGlass ? 'glass' : ((right === 0) ? extMat : intMat),
-            matMX: isGlass ? 'glass' : ((left  === 0) ? extMat : intMat),
-            vShift, botExt, topExt,
-          });
+          const isDoor = doors.has(dKey('v', x, z));
+          if (isDoor && relY < DOOR_TOP) continue;
+          const isExt  = (left === 0 || right === 0);
+          const vShift = isExt ? (left === 0 ? -slabThick * 0.5 : slabThick * 0.5) : 0;
+          const hasBotPerp = !!(  (x > 0 && walls.h[x - 1]?.[z])     || (x < width && walls.h[x]?.[z])   );
+          const hasTopPerp = !!(  (x > 0 && walls.h[x - 1]?.[z + 1]) || (x < width && walls.h[x]?.[z + 1]));
+          rawV.push({ z, left, right, vShift, hasBotPerp, hasTopPerp,
+                      isWin: windows.has(dKey('v', x, z)) });
         }
+        // Pass 2: resolve glass, suppressing at/adjacent to corners.
+        const segs = rawV.map((seg, si) => {
+          const atCorner   = seg.hasBotPerp || seg.hasTopPerp;
+          const prevCorner = si > 0 && rawV[si-1].z === seg.z - 1 && rawV[si-1].hasTopPerp;
+          const nextCorner = si < rawV.length - 1 && rawV[si+1].z === seg.z + 1 && rawV[si+1].hasBotPerp;
+          const isGlass = seg.isWin && !atCorner && !prevCorner && !nextCorner &&
+                          (archetype === 'office' || (relY >= WIN_BOT_R && relY <= WIN_TOP_R));
+          return {
+            z: seg.z, vShift: seg.vShift, hasBotPerp: seg.hasBotPerp, hasTopPerp: seg.hasTopPerp,
+            matPX: isGlass ? 'glass' : ((seg.right === 0) ? extMat : intMat),
+            matMX: isGlass ? 'glass' : ((seg.left  === 0) ? extMat : intMat),
+          };
+        });
 
         for (const faceDir of ['px', 'mx']) {
           const matKey   = faceDir === 'px' ? 'matPX' : 'matMX';
@@ -1033,8 +1118,9 @@ export function instantiateBuilding(buildingDef, wx, wy, wz) {
                    segs[j + 1].z === segs[j].z + 1 &&
                    segs[j + 1][matKey] === segs[j][matKey] &&
                    segs[j + 1].vShift === segs[j].vShift) { j++; }
-            const botZ  = wz + segs[i].z - segs[i].botExt;
-            const topZ  = wz + segs[j].z + 1 + segs[j].topExt;
+            // Merged quad spans [segs[i].z .. segs[j].z]. Panels sit exactly on grid (spec §2).
+            const botZ  = wz + segs[i].z;
+            const topZ  = wz + segs[j].z + 1;
             const vd    = topZ - botZ;
             const cz    = (botZ + topZ) * 0.5;
             const cx    = wx + x + segs[i].vShift;
@@ -1043,19 +1129,26 @@ export function instantiateBuilding(buildingDef, wx, wy, wz) {
           }
         }
 
-        for (const seg of segs) {
+        // Register individual panels + emit edge faces (culled per spec §3).
+        for (let si = 0; si < segs.length; si++) {
           if (panelCount >= MAX_PANELS) break;
+          const seg  = segs[si];
           const rMat = seg.matPX;
           const def  = PANEL_TYPES[rMat] ?? PANEL_TYPES.concrete;
           const arr  = getArr(rMat);
           const pcx  = wx + x + seg.vShift;
           const pcz  = wz + seg.z + 0.5;
+          const hasFront = si > 0 && segs[si - 1].z === seg.z - 1;
+          const hasBack  = si < segs.length - 1 && segs[si + 1].z === seg.z + 1;
+          const hasTop   = true; // slab/roof covers all tops — no cap to prevent Z-fighting
+          const hasBot   = true; // slab/foundation covers all bottoms
+          const edgeVerts = vPanelEdgesFiltered(pcx, cy, pcz, panelH, hasFront, hasBack, hasTop, hasBot);
           const vertexStart = arr.length / 3;
-          arr.push(...vPanelEdges(pcx, cy, pcz, panelH));
+          arr.push(...edgeVerts);
           registerPanel({
             id: _panelId++, type: rMat, hp: def.hp, maxHp: def.hp,
             gridX: x, gridY: f * 10 + p, wallId: x * 10000 + seg.z, buildingId,
-            vertexStart, vertexCount: 24, penetrationCost: def.pen, isSupported: true,
+            vertexStart, vertexCount: edgeVerts.length / 3, penetrationCost: def.pen, isSupported: true,
           });
           panelCount++;
         }
@@ -1066,17 +1159,10 @@ export function instantiateBuilding(buildingDef, wx, wy, wz) {
     for (const { x, z, type } of fp.props ?? []) {
       const def = PROP_DEFS[type];
       if (!def) continue;
-      const pMesh = new THREE.Mesh(
-        new THREE.BoxGeometry(def.w, def.h, def.d),
-        getPanelMat(def.mat),
-      );
-      pMesh.position.set(
-        wx + x + def.w * 0.5,
-        floorY + slabThick + def.h * 0.5,
-        wz + z + def.d * 0.5,
-      );
-      pMesh.castShadow = true;
-      group.add(pMesh);
+      const pcx = wx + x + def.w * 0.5;
+      const pcy = floorY + slabThick * 0.5 + def.h * 0.5; // floor surface + half height
+      const pcz = wz + z + def.d * 0.5;
+      getArr(def.mat).push(...solidBoxVerts(pcx, pcy, pcz, def.w, def.h, def.d));
       registerProp({ id: _panelId++, type, hp: def.hp, maxHp: def.hp, buildingId });
     }
 
@@ -1085,6 +1171,19 @@ export function instantiateBuilding(buildingDef, wx, wy, wz) {
       if (arr.length === 0) continue;
       const mesh = buildMesh(arr, getPanelMat(typeName));
       if (mesh) group.add(mesh);
+    }
+
+    // ── Roof mesh (top floor ceiling only, separate for debug toggling) ────
+    if (isTopFloor) {
+      for (const [typeName, arr] of Object.entries(roofVerts)) {
+        if (arr.length === 0) continue;
+        const mesh = buildMesh(arr, getPanelMat(typeName));
+        if (mesh) {
+          mesh.userData.isRoof = true;
+          group.add(mesh);
+          _roofMeshes.push(mesh);
+        }
+      }
     }
   }
 
