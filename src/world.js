@@ -70,14 +70,13 @@ export function generateChunk(cx, cz) {
     const bGroup = spawnBuilding(buildingDef, bx, groundY, bz);
     group.add(bGroup);
 
-    // Foundation skirt: solid concrete box from foundY up to just below groundY.
-    // Top face stops 0.05m below groundY to avoid Z-fighting with terrain at the
-    // corner sample points (which are exactly at groundY).
+    // Foundation skirt: solid concrete box from foundY up to groundY.
+    // Extended +0.1m in X and Z to cover wall overhang at those edges.
     if (groundY - foundY > 0.1) {
-      const fh = groundY - foundY - 0.05;
-      const fGeo = new THREE.BoxGeometry(bw, fh, bd);
+      const fh = groundY - foundY;
+      const fGeo = new THREE.BoxGeometry(bw + 0.1, fh, bd + 0.1);
       const fMesh = new THREE.Mesh(fGeo, _foundationMat);
-      fMesh.position.set(bx + bw / 2, foundY + fh / 2, bz + bd / 2);
+      fMesh.position.set(bx + (bw + 0.1) / 2, foundY + fh / 2, bz + (bd + 0.1) / 2);
       fMesh.receiveShadow = true;
       group.add(fMesh);
     }
