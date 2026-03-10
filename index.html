@@ -1,0 +1,427 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SPRAWL</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Rajdhani:wght@400;600;700&display=swap');
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #0a0a0a;
+    overflow: hidden;
+    font-family: 'Rajdhani', sans-serif;
+    cursor: none;
+  }
+
+  #game-canvas {
+    display: block;
+    width: 100vw;
+    height: 100vh;
+  }
+
+  /* HUD overlay */
+  #hud {
+    position: fixed;
+    top: 0; left: 0; right: 0; bottom: 0;
+    pointer-events: none;
+    z-index: 10;
+  }
+
+  /* Crosshair */
+  #crosshair {
+    position: absolute;
+    top: 50%; left: 50%;
+    transform: translate(-50%, -50%);
+    width: 24px; height: 24px;
+  }
+  #crosshair::before, #crosshair::after {
+    content: '';
+    position: absolute;
+    background: rgba(255, 255, 255, 0.85);
+  }
+  #crosshair::before {
+    width: 2px; height: 24px;
+    left: 11px; top: 0;
+  }
+  #crosshair::after {
+    width: 24px; height: 2px;
+    top: 11px; left: 0;
+  }
+
+  /* Health bar */
+  #health-bar {
+    position: absolute;
+    bottom: 40px; left: 40px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  #health-bar-label {
+    font-family: 'Share Tech Mono', monospace;
+    color: #e74c3c;
+    font-size: 14px;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+  }
+  #health-bar-bg {
+    width: 200px; height: 8px;
+    background: rgba(255,255,255,0.1);
+    border: 1px solid rgba(255,255,255,0.2);
+  }
+  #health-bar-fill {
+    height: 100%;
+    background: #e74c3c;
+    transition: width 0.3s;
+  }
+  #health-value {
+    font-family: 'Share Tech Mono', monospace;
+    color: #e74c3c;
+    font-size: 18px;
+  }
+
+  /* Ammo */
+  #ammo-display {
+    position: absolute;
+    bottom: 40px; right: 40px;
+    text-align: right;
+  }
+  #ammo-count {
+    font-family: 'Share Tech Mono', monospace;
+    color: #f39c12;
+    font-size: 48px;
+    line-height: 1;
+  }
+  #ammo-label {
+    font-family: 'Share Tech Mono', monospace;
+    color: rgba(255,255,255,0.4);
+    font-size: 12px;
+    letter-spacing: 3px;
+    text-transform: uppercase;
+  }
+
+  /* Score & distance */
+  #score-display {
+    position: absolute;
+    top: 30px; right: 40px;
+    text-align: right;
+  }
+  #score-value {
+    font-family: 'Share Tech Mono', monospace;
+    color: #fff;
+    font-size: 28px;
+  }
+  #score-label {
+    font-family: 'Share Tech Mono', monospace;
+    color: rgba(255,255,255,0.4);
+    font-size: 11px;
+    letter-spacing: 3px;
+  }
+  #distance-display {
+    position: absolute;
+    top: 30px; left: 40px;
+  }
+  #distance-value {
+    font-family: 'Share Tech Mono', monospace;
+    color: rgba(255,255,255,0.6);
+    font-size: 16px;
+  }
+  #fps-display {
+    position: absolute;
+    top: 52px; left: 40px;
+    font-family: 'Share Tech Mono', monospace;
+    color: rgba(255,255,255,0.35);
+    font-size: 12px;
+  }
+
+  /* Kill feed */
+  #kill-feed {
+    position: absolute;
+    top: 80px; right: 40px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .kill-entry {
+    font-family: 'Share Tech Mono', monospace;
+    color: #e74c3c;
+    font-size: 12px;
+    opacity: 1;
+    transition: opacity 1s;
+  }
+
+  /* Damage flash */
+  #damage-flash {
+    position: fixed;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background: radial-gradient(ellipse at center, transparent 50%, rgba(231, 76, 60, 0.4));
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.1s;
+    z-index: 5;
+  }
+
+  /* Start screen */
+  #start-screen {
+    position: fixed;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background: #0a0a0a;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    z-index: 100;
+    cursor: pointer;
+  }
+  #start-screen h1 {
+    font-family: 'Rajdhani', sans-serif;
+    font-weight: 700;
+    font-size: 72px;
+    color: #fff;
+    letter-spacing: 8px;
+    text-transform: uppercase;
+  }
+  #start-screen h1 span {
+    color: #e74c3c;
+  }
+  #start-screen .subtitle {
+    font-family: 'Share Tech Mono', monospace;
+    color: rgba(255,255,255,0.4);
+    font-size: 14px;
+    letter-spacing: 4px;
+    margin-top: 8px;
+  }
+  #start-screen .prompt {
+    font-family: 'Share Tech Mono', monospace;
+    color: rgba(255,255,255,0.6);
+    font-size: 16px;
+    margin-top: 60px;
+    animation: pulse 2s ease-in-out infinite;
+  }
+  #start-screen .controls {
+    font-family: 'Share Tech Mono', monospace;
+    color: rgba(255,255,255,0.25);
+    font-size: 11px;
+    margin-top: 30px;
+    line-height: 1.8;
+    text-align: center;
+    letter-spacing: 1px;
+  }
+  @keyframes pulse {
+    0%, 100% { opacity: 0.6; }
+    50% { opacity: 1; }
+  }
+
+  /* Death screen */
+  #death-screen {
+    position: fixed;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background: rgba(10, 10, 10, 0.9);
+    display: none;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    z-index: 100;
+    cursor: pointer;
+  }
+  #death-screen h2 {
+    font-family: 'Rajdhani', sans-serif;
+    font-weight: 700;
+    font-size: 56px;
+    color: #e74c3c;
+    letter-spacing: 6px;
+    text-transform: uppercase;
+  }
+  #death-screen .stats {
+    font-family: 'Share Tech Mono', monospace;
+    color: rgba(255,255,255,0.6);
+    font-size: 16px;
+    margin-top: 20px;
+    line-height: 2;
+    text-align: center;
+  }
+  #death-screen .prompt {
+    font-family: 'Share Tech Mono', monospace;
+    color: rgba(255,255,255,0.6);
+    font-size: 16px;
+    margin-top: 40px;
+    animation: pulse 2s ease-in-out infinite;
+  }
+
+  /* Wave display */
+  #wave-display {
+    position: absolute;
+    top: 30px;
+    left: 50%;
+    transform: translateX(-50%);
+    text-align: center;
+    pointer-events: none;
+  }
+  #wave-number {
+    font-family: 'Rajdhani', sans-serif;
+    font-weight: 700;
+    color: #f39c12;
+    font-size: 28px;
+    letter-spacing: 4px;
+    text-transform: uppercase;
+  }
+  #wave-status {
+    font-family: 'Share Tech Mono', monospace;
+    color: rgba(255,255,255,0.5);
+    font-size: 14px;
+    letter-spacing: 2px;
+    margin-top: 2px;
+  }
+  #wave-announce {
+    position: fixed;
+    top: 35%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    text-align: center;
+    pointer-events: none;
+    z-index: 15;
+    opacity: 0;
+    transition: opacity 0.4s;
+  }
+  #wave-announce .wave-title {
+    font-family: 'Rajdhani', sans-serif;
+    font-weight: 700;
+    color: #f39c12;
+    font-size: 56px;
+    letter-spacing: 6px;
+    text-transform: uppercase;
+  }
+  #wave-announce .wave-subtitle {
+    font-family: 'Share Tech Mono', monospace;
+    color: rgba(255,255,255,0.6);
+    font-size: 16px;
+    letter-spacing: 3px;
+    margin-top: 4px;
+  }
+
+  /* Hit marker */
+  #hit-marker {
+    position: absolute;
+    top: 50%; left: 50%;
+    transform: translate(-50%, -50%);
+    width: 20px; height: 20px;
+    opacity: 0;
+    pointer-events: none;
+    z-index: 11;
+  }
+  #hit-marker::before, #hit-marker::after {
+    content: '';
+    position: absolute;
+    top: 50%; left: 50%;
+    width: 2px; height: 20px;
+    background: rgba(255, 255, 255, 0.9);
+  }
+  #hit-marker::before { transform: translate(-50%, -50%) rotate(45deg); }
+  #hit-marker::after  { transform: translate(-50%, -50%) rotate(-45deg); }
+
+  #hit-marker.kill {
+    width: 28px; height: 28px;
+    animation: hit-marker-pop 80ms ease-out;
+  }
+  #hit-marker.kill::before, #hit-marker.kill::after {
+    background: #e74c3c;
+    width: 3px; height: 28px;
+  }
+
+  @keyframes hit-marker-pop {
+    0%   { transform: translate(-50%, -50%) scale(1.3); }
+    100% { transform: translate(-50%, -50%) scale(1.0); }
+  }
+
+  /* ADS vignette */
+  #ads-vignette {
+    position: fixed;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background: radial-gradient(ellipse at center, transparent 60%, rgba(0,0,0,0.5) 100%);
+    opacity: 0;
+    pointer-events: none;
+    z-index: 4;
+  }
+
+  /* Muzzle flash */
+  #muzzle-flash {
+    position: fixed;
+    bottom: 15%;
+    right: 35%;
+    width: 40px; height: 40px;
+    background: radial-gradient(circle, #fff 0%, #f39c12 40%, transparent 70%);
+    border-radius: 50%;
+    opacity: 0;
+    pointer-events: none;
+    z-index: 8;
+  }
+</style>
+</head>
+<body>
+
+<div id="start-screen">
+  <h1>SPR<span>AWL</span></h1>
+  <div class="subtitle">INFINITE URBAN COMBAT</div>
+  <div class="prompt">[ CLICK TO BEGIN ]</div>
+  <div class="controls">
+    WASD — MOVE &nbsp;&nbsp;|&nbsp;&nbsp; MOUSE — AIM &nbsp;&nbsp;|&nbsp;&nbsp; LMB — SHOOT &nbsp;&nbsp;|&nbsp;&nbsp; RMB — ADS &nbsp;&nbsp;|&nbsp;&nbsp; R — RELOAD &nbsp;&nbsp;|&nbsp;&nbsp; SHIFT — SPRINT &nbsp;&nbsp;|&nbsp;&nbsp; T — TIME OF DAY
+  </div>
+</div>
+
+<div id="death-screen">
+  <h2>ELIMINATED</h2>
+  <div class="stats" id="death-stats"></div>
+  <div class="prompt">[ CLICK TO RESTART ]</div>
+</div>
+
+<canvas id="game-canvas"></canvas>
+
+<div id="hud">
+  <div id="crosshair"></div>
+  <div id="hit-marker"></div>
+  <div id="health-bar">
+    <span id="health-bar-label">HP</span>
+    <div id="health-bar-bg"><div id="health-bar-fill" style="width:100%"></div></div>
+    <span id="health-value">100</span>
+  </div>
+  <div id="ammo-display">
+    <div id="ammo-count">30</div>
+    <div id="ammo-label">ROUNDS</div>
+  </div>
+  <div id="score-display">
+    <div id="score-value">0</div>
+    <div id="score-label">KILLS</div>
+  </div>
+  <div id="distance-display">
+    <div id="distance-value">0m</div>
+  </div>
+  <div id="fps-display">-- FPS</div>
+  <div id="kill-feed"></div>
+  <div id="wave-display">
+    <div id="wave-number"></div>
+    <div id="wave-status"></div>
+  </div>
+</div>
+
+<div id="wave-announce">
+  <div class="wave-title"></div>
+  <div class="wave-subtitle"></div>
+</div>
+
+<div id="ads-vignette"></div>
+<div id="damage-flash"></div>
+<div id="muzzle-flash"></div>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.module.js"
+  }
+}
+</script>
+
+<script type="module" src="src/main.js"></script>
+
+</body>
+</html>

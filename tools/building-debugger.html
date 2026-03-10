@@ -1,0 +1,1061 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>SPRAWL — Building Debugger</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Rajdhani:wght@600;700&display=swap" rel="stylesheet">
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      display: flex;
+      height: 100vh;
+      background: #1a1a2e;
+      color: #eee;
+      font-family: 'Share Tech Mono', monospace;
+      overflow: hidden;
+    }
+
+    /* ── Left panel ── */
+    #left-panel {
+      width: 40%;
+      min-width: 320px;
+      display: flex;
+      flex-direction: column;
+      background: #0f0f1a;
+      border-right: 1px solid #2a2a3a;
+      overflow-y: auto;
+    }
+
+    #header {
+      padding: 12px 16px;
+      background: #0a0a14;
+      border-bottom: 1px solid #2a2a3a;
+      flex-shrink: 0;
+    }
+    #header h1 {
+      font-family: 'Rajdhani', sans-serif;
+      font-size: 17px;
+      font-weight: 700;
+      color: #f39c12;
+      letter-spacing: 3px;
+      text-transform: uppercase;
+    }
+    #header h1 span { color: #e74c3c; }
+
+    #controls {
+      padding: 12px 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      flex-shrink: 0;
+      border-bottom: 1px solid #1e1e2e;
+    }
+
+    .ctrl-row { display: flex; gap: 8px; align-items: center; }
+    .ctrl-label {
+      font-size: 10px;
+      color: rgba(255,255,255,0.4);
+      letter-spacing: 1.5px;
+      text-transform: uppercase;
+      margin-bottom: 3px;
+    }
+    .ctrl-group { display: flex; flex-direction: column; flex: 1; }
+
+    select, input[type="number"] {
+      background: #1a1a2e;
+      color: #eee;
+      border: 1px solid #3a3a5a;
+      padding: 6px 8px;
+      font-family: 'Share Tech Mono', monospace;
+      font-size: 12px;
+      width: 100%;
+    }
+    select:focus, input[type="number"]:focus {
+      outline: none;
+      border-color: #f39c12;
+    }
+
+    button {
+      background: #1e1e3a;
+      color: #ccc;
+      border: 1px solid #3a3a5a;
+      padding: 7px 10px;
+      cursor: pointer;
+      font-family: 'Share Tech Mono', monospace;
+      font-size: 11px;
+      letter-spacing: 1px;
+      text-transform: uppercase;
+      flex: 1;
+    }
+    button:hover { background: #2a2a4a; color: #eee; }
+    button.accent { border-color: #2ecc71; color: #2ecc71; }
+    button.accent:hover { background: #0f2a1a; }
+
+    .sep { height: 1px; background: #1e1e2e; margin: 4px 0; }
+
+    #toggle-section {
+      padding: 8px 16px;
+      flex-shrink: 0;
+      border-bottom: 1px solid #1e1e2e;
+    }
+    #toggle-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 5px;
+      margin-top: 5px;
+    }
+    .toggle-item {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 11px;
+      color: rgba(255,255,255,0.7);
+      cursor: pointer;
+    }
+    .toggle-item input[type="checkbox"] {
+      width: 13px;
+      height: 13px;
+      cursor: pointer;
+      accent-color: #f39c12;
+    }
+
+    #plan-container {
+      flex: 1;
+      min-height: 200px;
+      padding: 12px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      background: #0d0d1a;
+    }
+    #plan-canvas {
+      border: 1px solid #2a2a3a;
+      display: block;
+      cursor: crosshair;
+      image-rendering: pixelated;
+    }
+
+    #validation-panel {
+      padding: 10px 16px;
+      border-top: 1px solid #1e1e2e;
+      flex-shrink: 0;
+      max-height: 140px;
+      overflow-y: auto;
+    }
+    .val-header {
+      font-size: 10px;
+      color: rgba(255,255,255,0.35);
+      letter-spacing: 2px;
+      text-transform: uppercase;
+      margin-bottom: 5px;
+    }
+    #validation-list { list-style: none; }
+    #validation-list li { font-size: 11px; padding: 2px 0; }
+    #validation-list li.ok  { color: #2ecc71; }
+    #validation-list li.warn { color: #f39c12; }
+    #validation-list li.err  { color: #e74c3c; }
+
+    #export-row {
+      padding: 10px 16px;
+      display: flex;
+      gap: 8px;
+      border-top: 1px solid #1e1e2e;
+      flex-shrink: 0;
+    }
+
+    /* ── Right panel ── */
+    #right-panel {
+      flex: 1;
+      position: relative;
+      overflow: hidden;
+    }
+    #three-container {
+      width: 100%;
+      height: 100%;
+    }
+    #three-container canvas {
+      display: block;
+    }
+
+    /* ── Tooltip ── */
+    #tooltip {
+      position: fixed;
+      display: none;
+      background: rgba(0,0,0,0.85);
+      color: #eee;
+      padding: 4px 9px;
+      font-size: 11px;
+      pointer-events: none;
+      z-index: 100;
+      border: 1px solid #3a3a5a;
+      white-space: nowrap;
+    }
+
+    /* ── Info bar ── */
+    #info-bar {
+      position: absolute;
+      bottom: 10px;
+      left: 10px;
+      font-size: 10px;
+      color: rgba(255,255,255,0.3);
+      pointer-events: none;
+    }
+  </style>
+</head>
+<body>
+
+<div id="left-panel">
+  <div id="header">
+    <h1>SPR<span>AWL</span> — Building Debugger</h1>
+  </div>
+
+  <div id="controls">
+    <div class="ctrl-row">
+      <div class="ctrl-group">
+        <div class="ctrl-label">Archetype</div>
+        <select id="sel-archetype">
+          <option value="warehouse">Warehouse</option>
+          <option value="dwelling">Dwelling</option>
+          <option value="apartment">Apartment</option>
+          <option value="office">Office</option>
+          <option value="strip_mall">Strip Mall</option>
+        </select>
+      </div>
+      <div class="ctrl-group">
+        <div class="ctrl-label">Floor</div>
+        <select id="sel-floor"><option value="0">0</option></select>
+      </div>
+    </div>
+
+    <div class="ctrl-row">
+      <div class="ctrl-group">
+        <div class="ctrl-label">Seed</div>
+        <input type="number" id="inp-seed" value="42" min="0" max="4294967295">
+      </div>
+    </div>
+
+    <div class="ctrl-row">
+      <button id="btn-regen">Regenerate</button>
+      <button id="btn-random">Random</button>
+    </div>
+  </div>
+
+  <div id="toggle-section">
+    <div class="ctrl-label">Overlays</div>
+    <div id="toggle-grid">
+      <label class="toggle-item"><input type="checkbox" data-toggle="walls" checked> Walls</label>
+      <label class="toggle-item"><input type="checkbox" data-toggle="doors" checked> Doors</label>
+      <label class="toggle-item"><input type="checkbox" data-toggle="windows" checked> Windows</label>
+      <label class="toggle-item"><input type="checkbox" data-toggle="roomLabels" checked> Room Labels</label>
+      <label class="toggle-item"><input type="checkbox" data-toggle="gridLines"> Grid Lines</label>
+      <label class="toggle-item"><input type="checkbox" data-toggle="stairs"> Stairs</label>
+    </div>
+  </div>
+
+  <div id="plan-container">
+    <canvas id="plan-canvas" width="400" height="400"></canvas>
+  </div>
+
+  <div id="validation-panel">
+    <div class="val-header">Validation</div>
+    <ul id="validation-list"></ul>
+  </div>
+
+  <div id="export-row">
+    <button id="btn-copy-seed">Copy Seed</button>
+    <button id="btn-dump-json" class="accent">Dump JSON</button>
+  </div>
+</div>
+
+<div id="right-panel">
+  <div id="three-container"></div>
+  <div id="info-bar">Drag to orbit · Scroll to zoom · Right-drag to pan &nbsp;|&nbsp; <span style="color:#e74c3c">X+</span> <span style="color:#2ecc71">Y+</span> <span style="color:#3498db">Z+</span></div>
+</div>
+
+<div id="tooltip"></div>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.module.js",
+    "three/examples/jsm/controls/OrbitControls": "https://cdn.jsdelivr.net/npm/three@0.128.0/examples/jsm/controls/OrbitControls.js"
+  }
+}
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls';
+import { generateBuilding, instantiateBuilding, PANEL_TYPES } from '../src/buildings.js';
+import { seededRNG } from '../src/utils.js';
+
+// ─── Constants ────────────────────────────────────────────────────────────────
+
+const ARCHETYPES = ['warehouse', 'dwelling', 'apartment', 'office', 'strip_mall'];
+
+const CELL_COLORS = {
+  0: '#d8d8d8', // exterior
+  1: '#ffffff', // interior
+  2: '#fffde7', // corridor
+  3: '#e3f2fd', // stairwell
+};
+
+const CELL_NAMES = ['exterior', 'interior', 'corridor', 'stairwell'];
+
+// ─── State ────────────────────────────────────────────────────────────────────
+
+const state = {
+  archetype: 'warehouse',
+  seed: 42,
+  buildingDef: null,
+  currentFloor: 0,
+  floorGroups: [],
+  rooms: null,
+  validationResults: null,
+  toggles: {
+    walls: true,
+    doors: true,
+    windows: true,
+    roomLabels: true,
+    gridLines: false,
+    stairs: false,
+  },
+};
+
+// ─── Three.js Init ────────────────────────────────────────────────────────────
+
+const threeContainer = document.getElementById('three-container');
+
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(window.devicePixelRatio);
+renderer.setSize(threeContainer.clientWidth, threeContainer.clientHeight);
+threeContainer.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x1a1a2e);
+
+const camera = new THREE.PerspectiveCamera(
+  60,
+  threeContainer.clientWidth / threeContainer.clientHeight,
+  0.1,
+  1000
+);
+camera.position.set(20, 20, 20);
+
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+controls.dampingFactor = 0.07;
+
+const ambient = new THREE.AmbientLight(0x404060, 0.6);
+scene.add(ambient);
+
+const sun = new THREE.DirectionalLight(0xffffff, 0.9);
+sun.position.set(30, 60, 20);
+scene.add(sun);
+
+const gridHelper = new THREE.GridHelper(200, 200, 0x222233, 0x1a1a28);
+scene.add(gridHelper);
+
+// Axis arrows: red=+X, green=+Y, blue=+Z
+const axesHelper = new THREE.AxesHelper(5);
+scene.add(axesHelper);
+
+new ResizeObserver(() => {
+  const w = threeContainer.clientWidth;
+  const h = threeContainer.clientHeight;
+  renderer.setSize(w, h);
+  camera.aspect = w / h;
+  camera.updateProjectionMatrix();
+}).observe(threeContainer);
+
+// ─── Building Generation ──────────────────────────────────────────────────────
+
+function regenerate() {
+  const rng = seededRNG(state.seed);
+  state.buildingDef = generateBuilding(state.archetype, rng);
+  state.currentFloor = Math.min(state.currentFloor, state.buildingDef.floors.length - 1);
+  state.rooms = state.buildingDef.floors.map(deriveRooms);
+  state.validationResults = validateBuilding(state.buildingDef);
+  rebuildThreeScene();
+  updateUI();
+  draw2D();
+}
+
+function rebuildThreeScene() {
+  // Remove old floor groups
+  for (const g of state.floorGroups) scene.remove(g);
+  state.floorGroups = [];
+
+  const bd = state.buildingDef;
+  for (let f = 0; f < bd.floors.length; f++) {
+    // Instantiate each floor as a single-floor BuildingDef so we can toggle visibility
+    const group = instantiateBuilding(
+      { ...bd, floors: [bd.floors[f]] },
+      0,
+      f * bd.heightPerFloor,
+      0
+    );
+    group.visible = (f <= state.currentFloor);
+    scene.add(group);
+    state.floorGroups.push(group);
+  }
+
+  frameCameraOnBuilding(bd);
+}
+
+function applyFloorVisibility() {
+  state.floorGroups.forEach((g, f) => {
+    g.visible = (f <= state.currentFloor);
+  });
+}
+
+function frameCameraOnBuilding(bd) {
+  const diag = Math.sqrt(bd.footprintW ** 2 + bd.footprintD ** 2);
+  const totalH = bd.floors.length * bd.heightPerFloor;
+  camera.position.set(
+    bd.footprintW / 2 + diag,
+    totalH + diag * 0.5,
+    bd.footprintD / 2 + diag
+  );
+  controls.target.set(bd.footprintW / 2, totalH / 2, bd.footprintD / 2);
+  controls.update();
+}
+
+// ─── 2D Canvas ────────────────────────────────────────────────────────────────
+
+const planCanvas = document.getElementById('plan-canvas');
+const planCtx = planCanvas.getContext('2d');
+const tooltip = document.getElementById('tooltip');
+
+// Resize canvas to fit its container
+const planContainer = document.getElementById('plan-container');
+new ResizeObserver(() => {
+  const size = Math.max(160, Math.min(
+    planContainer.clientWidth - 24,
+    planContainer.clientHeight - 24
+  ));
+  const dpr = window.devicePixelRatio || 1;
+  planCanvas.width = size * dpr;
+  planCanvas.height = size * dpr;
+  planCanvas.style.width = size + 'px';
+  planCanvas.style.height = size + 'px';
+  planCtx.scale(dpr, dpr);
+  draw2D();
+}).observe(planContainer);
+
+function getLogicalSize() {
+  return parseInt(planCanvas.style.width) || 400;
+}
+
+function getScale(fp) {
+  const size = getLogicalSize();
+  const margin = 14;
+  const cellPx = Math.min(
+    (size - 2 * margin) / fp.width,
+    (size - 2 * margin) / fp.depth
+  );
+  // Center the plan
+  const offsetX = margin + ((size - 2 * margin) - fp.width * cellPx) / 2;
+  const offsetZ = margin + ((size - 2 * margin) - fp.depth * cellPx) / 2;
+  return { cellPx, offsetX, offsetZ };
+}
+
+// Cell (x, z) → canvas top-left pixel (z=0 at bottom)
+function cellToCanvas(x, z, fp, cellPx, offsetX, offsetZ) {
+  return {
+    cx: offsetX + x * cellPx,
+    cy: offsetZ + (fp.depth - 1 - z) * cellPx,
+  };
+}
+
+function draw2D() {
+  const size = getLogicalSize();
+  planCtx.clearRect(0, 0, size, size);
+
+  const fp = state.buildingDef?.floors[state.currentFloor];
+  if (!fp) return;
+
+  const { cellPx, offsetX, offsetZ } = getScale(fp);
+
+  // ── Background ──
+  planCtx.fillStyle = CELL_COLORS[0];
+  planCtx.fillRect(
+    offsetX, offsetZ,
+    fp.width * cellPx,
+    fp.depth * cellPx
+  );
+
+  // ── Cell fills ──
+  for (let x = 0; x < fp.width; x++) {
+    for (let z = 0; z < fp.depth; z++) {
+      const v = fp.cells[x][z];
+      if (!v) continue;
+      const { cx, cy } = cellToCanvas(x, z, fp, cellPx, offsetX, offsetZ);
+      planCtx.fillStyle = CELL_COLORS[v] ?? '#ffffff';
+      planCtx.fillRect(cx, cy, cellPx, cellPx);
+    }
+  }
+
+  // ── Validation overlay (unreachable cells) ──
+  if (state.validationResults?.unreachableCells) {
+    const uc = state.validationResults.unreachableCells[state.currentFloor];
+    if (uc?.length) {
+      planCtx.fillStyle = 'rgba(231,76,60,0.35)';
+      for (const [x, z] of uc) {
+        const { cx, cy } = cellToCanvas(x, z, fp, cellPx, offsetX, offsetZ);
+        planCtx.fillRect(cx, cy, cellPx, cellPx);
+      }
+    }
+  }
+
+  // ── Grid lines ──
+  if (state.toggles.gridLines) {
+    planCtx.strokeStyle = 'rgba(0,0,0,0.12)';
+    planCtx.lineWidth = 0.5;
+    for (let x = 0; x <= fp.width; x++) {
+      planCtx.beginPath();
+      planCtx.moveTo(offsetX + x * cellPx, offsetZ);
+      planCtx.lineTo(offsetX + x * cellPx, offsetZ + fp.depth * cellPx);
+      planCtx.stroke();
+    }
+    for (let z = 0; z <= fp.depth; z++) {
+      planCtx.beginPath();
+      planCtx.moveTo(offsetX, offsetZ + z * cellPx);
+      planCtx.lineTo(offsetX + fp.width * cellPx, offsetZ + z * cellPx);
+      planCtx.stroke();
+    }
+  }
+
+  // ── Walls ──
+  if (state.toggles.walls) drawWalls(fp, cellPx, offsetX, offsetZ);
+
+  // ── Doors (drawn after walls — erase gap + arc) ──
+  if (state.toggles.doors) drawDoors(fp, cellPx, offsetX, offsetZ);
+
+  // ── Windows (drawn after walls — blue line over wall) ──
+  if (state.toggles.windows) drawWindows(fp, cellPx, offsetX, offsetZ);
+
+  // ── Room labels ──
+  if (state.toggles.roomLabels && state.rooms) {
+    drawRoomLabels(state.rooms[state.currentFloor], fp, cellPx, offsetX, offsetZ);
+  }
+}
+
+function drawWalls(fp, cellPx, offsetX, offsetZ) {
+  // H-walls: walls.h[x][z] is the boundary between row z-1 and row z (runs along X)
+  // Canvas Y position of boundary z: offsetZ + (depth - z) * cellPx
+  for (let x = 0; x < fp.width; x++) {
+    for (let z = 0; z <= fp.depth; z++) {
+      if (!fp.walls.h[x]?.[z]) continue;
+      const below = z > 0       ? fp.cells[x][z - 1] : 0;
+      const above = z < fp.depth ? fp.cells[x][z]     : 0;
+      const isExt = !below || !above;
+      const wx = offsetX + x * cellPx;
+      const wy = offsetZ + (fp.depth - z) * cellPx;
+      planCtx.beginPath();
+      planCtx.moveTo(wx, wy);
+      planCtx.lineTo(wx + cellPx, wy);
+      planCtx.strokeStyle = '#111111';
+      planCtx.lineWidth = isExt ? 2.5 : 1.0;
+      planCtx.stroke();
+    }
+  }
+
+  // V-walls: walls.v[x][z] is the boundary between column x-1 and x (runs along Z)
+  // Canvas X position of boundary x: offsetX + x * cellPx
+  for (let x = 0; x <= fp.width; x++) {
+    for (let z = 0; z < fp.depth; z++) {
+      if (!fp.walls.v[x]?.[z]) continue;
+      const left  = x > 0       ? fp.cells[x - 1][z] : 0;
+      const right = x < fp.width ? fp.cells[x][z]     : 0;
+      const isExt = !left || !right;
+      const wx = offsetX + x * cellPx;
+      const wy = offsetZ + (fp.depth - 1 - z) * cellPx;
+      planCtx.beginPath();
+      planCtx.moveTo(wx, wy);
+      planCtx.lineTo(wx, wy + cellPx);
+      planCtx.strokeStyle = '#111111';
+      planCtx.lineWidth = isExt ? 2.5 : 1.0;
+      planCtx.stroke();
+    }
+  }
+}
+
+function drawDoors(fp, cellPx, offsetX, offsetZ) {
+  const gapFrac = 0.75; // door occupies 75% of cell width
+  const pad = cellPx * (1 - gapFrac) / 2;
+
+  for (const key of fp.doors) {
+    const [axis, xs, zs] = key.split(':');
+    const x = +xs, z = +zs;
+
+    if (axis === 'h') {
+      // Horizontal wall at boundary z, running along X for column x
+      const wy = offsetZ + (fp.depth - z) * cellPx;
+      const wx = offsetX + x * cellPx;
+      const gapLeft  = wx + pad;
+      const gapRight = wx + cellPx - pad;
+      const gapW = gapRight - gapLeft;
+
+      // Erase the gap in the wall
+      const above = z < fp.depth ? fp.cells[x][z]     : 0;
+      const below = z > 0        ? fp.cells[x][z - 1] : 0;
+      const bgColor = (above >= 1) ? CELL_COLORS[above] : (below >= 1 ? CELL_COLORS[below] : CELL_COLORS[0]);
+      planCtx.fillStyle = bgColor ?? '#ffffff';
+      planCtx.fillRect(gapLeft, wy - 1.5, gapW, 3);
+
+      // Door arc — swing toward the interior side
+      // "above" = cells[x][z] (smaller canvas Y = higher on screen)
+      // "below" = cells[x][z-1] (larger canvas Y = lower on screen)
+      const swingUp = above >= 1 && (!below || below === 0); // swing toward smaller canvasY
+      planCtx.beginPath();
+      planCtx.strokeStyle = '#555555';
+      planCtx.lineWidth = 1;
+      if (swingUp) {
+        // Hinge at gapLeft, door swings upward (negative canvas Y)
+        planCtx.arc(gapLeft, wy, gapW, 0, -Math.PI / 2, true);
+      } else {
+        // Hinge at gapLeft, door swings downward (positive canvas Y)
+        planCtx.arc(gapLeft, wy, gapW, 0, Math.PI / 2, false);
+      }
+      planCtx.stroke();
+
+    } else {
+      // Vertical wall at boundary x, running along Z for row z
+      const wx = offsetX + x * cellPx;
+      const wy = offsetZ + (fp.depth - 1 - z) * cellPx;
+      const gapTop    = wy + pad;
+      const gapBottom = wy + cellPx - pad;
+      const gapH = gapBottom - gapTop;
+
+      // Erase the gap
+      const right = x < fp.width ? fp.cells[x][z]     : 0;
+      const left  = x > 0        ? fp.cells[x - 1][z] : 0;
+      const bgColor = (right >= 1) ? CELL_COLORS[right] : (left >= 1 ? CELL_COLORS[left] : CELL_COLORS[0]);
+      planCtx.fillStyle = bgColor ?? '#ffffff';
+      planCtx.fillRect(wx - 1.5, gapTop, 3, gapH);
+
+      // Door arc — swing toward interior
+      const swingRight = right >= 1 && (!left || left === 0);
+      planCtx.beginPath();
+      planCtx.strokeStyle = '#555555';
+      planCtx.lineWidth = 1;
+      if (swingRight) {
+        // Hinge at gapTop, door swings right (positive canvas X)
+        planCtx.arc(wx, gapTop, gapH, Math.PI / 2, Math.PI, true);
+      } else {
+        // Hinge at gapTop, door swings left (negative canvas X)
+        planCtx.arc(wx, gapTop, gapH, Math.PI / 2, 0, false);
+      }
+      planCtx.stroke();
+    }
+  }
+}
+
+function drawWindows(fp, cellPx, offsetX, offsetZ) {
+  planCtx.strokeStyle = '#42a5f5';
+  planCtx.lineWidth = 3;
+
+  for (const key of fp.windows) {
+    const [axis, xs, zs] = key.split(':');
+    const x = +xs, z = +zs;
+
+    if (axis === 'h') {
+      const wx = offsetX + x * cellPx;
+      const wy = offsetZ + (fp.depth - z) * cellPx;
+      planCtx.beginPath();
+      planCtx.moveTo(wx, wy);
+      planCtx.lineTo(wx + cellPx, wy);
+      planCtx.stroke();
+    } else {
+      const wx = offsetX + x * cellPx;
+      const wy = offsetZ + (fp.depth - 1 - z) * cellPx;
+      planCtx.beginPath();
+      planCtx.moveTo(wx, wy);
+      planCtx.lineTo(wx, wy + cellPx);
+      planCtx.stroke();
+    }
+  }
+}
+
+function drawRoomLabels(rooms, fp, cellPx, offsetX, offsetZ) {
+  if (!rooms?.length) return;
+  const fontSize = Math.max(8, Math.min(11, cellPx * 0.8));
+  planCtx.font = `${fontSize}px 'Share Tech Mono', monospace`;
+  planCtx.textAlign = 'center';
+  planCtx.textBaseline = 'middle';
+
+  for (const room of rooms) {
+    if (room.cells.length < 2) continue;
+    const canvasCX = offsetX + (room.centX + 0.5) * cellPx;
+    const canvasCY = offsetZ + (fp.depth - 1 - room.centZ) * cellPx + cellPx / 2;
+
+    planCtx.fillStyle = 'rgba(0,0,0,0.55)';
+    const label = room.label;
+    const tw = planCtx.measureText(label).width;
+    planCtx.fillRect(canvasCX - tw / 2 - 2, canvasCY - fontSize / 2 - 1, tw + 4, fontSize + 2);
+
+    planCtx.fillStyle = room.cellType === 2 ? '#a08000' :
+                        room.cellType === 3 ? '#1565c0' : '#333333';
+    planCtx.fillText(label, canvasCX, canvasCY);
+  }
+}
+
+// ─── Room Derivation ──────────────────────────────────────────────────────────
+
+function deriveRooms(fp) {
+  const { cells, walls, width, depth } = fp;
+  const visited = Array.from({ length: width }, () => new Uint8Array(depth));
+  const rooms = [];
+
+  for (let sx = 0; sx < width; sx++) {
+    for (let sz = 0; sz < depth; sz++) {
+      if (!cells[sx][sz] || visited[sx][sz]) continue;
+
+      const cellType = cells[sx][sz];
+      const region = [];
+      const queue = [[sx, sz]];
+      visited[sx][sz] = 1;
+
+      while (queue.length) {
+        const [cx, cz] = queue.shift();
+        region.push([cx, cz]);
+
+        // Check 4 neighbors, blocked by walls
+        // Right: v-wall at v[cx+1][cz]
+        if (cx + 1 < width && !visited[cx+1][cz] && cells[cx+1][cz]) {
+          if (!walls.v[cx+1]?.[cz] || fp.doors.has(`v:${cx+1}:${cz}`)) {
+            visited[cx+1][cz] = 1; queue.push([cx+1, cz]);
+          }
+        }
+        // Left: v-wall at v[cx][cz]
+        if (cx - 1 >= 0 && !visited[cx-1][cz] && cells[cx-1][cz]) {
+          if (!walls.v[cx]?.[cz] || fp.doors.has(`v:${cx}:${cz}`)) {
+            visited[cx-1][cz] = 1; queue.push([cx-1, cz]);
+          }
+        }
+        // Up (z+1): h-wall at h[cx][cz+1]
+        if (cz + 1 < depth && !visited[cx][cz+1] && cells[cx][cz+1]) {
+          if (!walls.h[cx]?.[cz+1] || fp.doors.has(`h:${cx}:${cz+1}`)) {
+            visited[cx][cz+1] = 1; queue.push([cx, cz+1]);
+          }
+        }
+        // Down (z-1): h-wall at h[cx][cz]
+        if (cz - 1 >= 0 && !visited[cx][cz-1] && cells[cx][cz-1]) {
+          if (!walls.h[cx]?.[cz] || fp.doors.has(`h:${cx}:${cz}`)) {
+            visited[cx][cz-1] = 1; queue.push([cx, cz-1]);
+          }
+        }
+      }
+
+      const centX = region.reduce((s, [rx]) => s + rx, 0) / region.length;
+      const centZ = region.reduce((s, [, rz]) => s + rz, 0) / region.length;
+      const label = cellType === 2 ? 'corridor' : cellType === 3 ? 'stair' : 'room';
+
+      rooms.push({ cells: region, cellType, centX, centZ, label });
+    }
+  }
+
+  return rooms;
+}
+
+// ─── Validation ───────────────────────────────────────────────────────────────
+
+function validateBuilding(bd) {
+  const warnings = [];
+  const errors = [];
+  const unreachableCells = [];
+
+  // 1. Panel count — match instantiateBuilding's actual accounting
+  // wallRows = ceil(heightPerFloor - 2*0.1); each wall segment = wallRows panels
+  const slabThick = 0.1;
+  const clearH = bd.heightPerFloor - slabThick;
+  const wallRows = Math.ceil(clearH);
+  let panelEst = 0;
+  for (const fp of bd.floors) {
+    // Floor + ceiling slabs: 2 merged rects per contiguous region (approximate as 2 per floor)
+    // In practice mergeSlabs collapses open spaces aggressively, so count regions × 2
+    let interior = 0;
+    for (let x = 0; x < fp.width; x++)
+      for (let z = 0; z < fp.depth; z++)
+        if (fp.cells[x][z]) interior++;
+    // Rough estimate: ~2 panels per floor for slabs (merged), not 2 per cell
+    panelEst += Math.ceil(interior / (fp.width * fp.depth) * 4) + 2;
+    // H-wall segments × wallRows
+    for (let x = 0; x < fp.width; x++)
+      for (let z = 0; z <= fp.depth; z++)
+        if (fp.walls.h[x]?.[z]) {
+          panelEst += fp.doors.has(`h:${x}:${z}`) ? 1 : wallRows; // door = lintel only
+        }
+    // V-wall segments × wallRows
+    for (let x = 0; x <= fp.width; x++)
+      for (let z = 0; z < fp.depth; z++)
+        if (fp.walls.v[x]?.[z]) {
+          panelEst += fp.doors.has(`v:${x}:${z}`) ? 1 : wallRows;
+        }
+  }
+  if (panelEst > 500) {
+    warnings.push(`~${panelEst} panels needed — exceeds MAX_PANELS (500), geometry will be truncated at 500`);
+  }
+
+  // 2. Exterior door on ground floor
+  const gf = bd.floors[0];
+  let hasExtDoor = false;
+  for (const key of gf.doors) {
+    const [axis, xs, zs] = key.split(':');
+    const x = +xs, z = +zs;
+    let isExt = false;
+    if (axis === 'h') {
+      const above = z < gf.depth ? gf.cells[x][z]     : 0;
+      const below = z > 0        ? gf.cells[x][z - 1] : 0;
+      isExt = !above || !below;
+    } else {
+      const right = x < gf.width ? gf.cells[x][z]     : 0;
+      const left  = x > 0        ? gf.cells[x - 1][z] : 0;
+      isExt = !right || !left;
+    }
+    if (isExt) { hasExtDoor = true; break; }
+  }
+  if (!hasExtDoor) errors.push('Ground floor: no exterior door');
+
+  // 3. Unreachable rooms (ground floor only — upper floors lack stairs)
+  {
+    const fp = bd.floors[0];
+    const reached = Array.from({ length: fp.width }, () => new Uint8Array(fp.depth));
+    const queue = [];
+
+    // Seed BFS from interior cells adjacent to exterior doors
+    for (const key of fp.doors) {
+      const [axis, xs, zs] = key.split(':');
+      const x = +xs, z = +zs;
+      if (axis === 'h') {
+        const above = z < fp.depth ? fp.cells[x][z]     : 0;
+        const below = z > 0        ? fp.cells[x][z - 1] : 0;
+        if (!above && below >= 1 && !reached[x][z-1]) { reached[x][z-1] = 1; queue.push([x, z-1]); }
+        if (!below && above >= 1 && !reached[x][z])   { reached[x][z]   = 1; queue.push([x, z]);   }
+      } else {
+        const right = x < fp.width ? fp.cells[x][z]     : 0;
+        const left  = x > 0        ? fp.cells[x-1][z]   : 0;
+        if (!right && left >= 1 && !reached[x-1][z]) { reached[x-1][z] = 1; queue.push([x-1, z]); }
+        if (!left && right >= 1 && !reached[x][z])   { reached[x][z]   = 1; queue.push([x, z]);   }
+      }
+    }
+
+    // BFS
+    while (queue.length) {
+      const [cx, cz] = queue.shift();
+      const tryMove = (nx, nz, axis, wx, wz) => {
+        if (nx < 0 || nx >= fp.width || nz < 0 || nz >= fp.depth) return;
+        if (reached[nx][nz] || !fp.cells[nx][nz]) return;
+        const wallVal = axis === 'h' ? fp.walls.h[wx]?.[wz] : fp.walls.v[wx]?.[wz];
+        const doorKey = `${axis}:${wx}:${wz}`;
+        if (wallVal && !fp.doors.has(doorKey)) return;
+        reached[nx][nz] = 1;
+        queue.push([nx, nz]);
+      };
+      tryMove(cx+1, cz,   'v', cx+1, cz);
+      tryMove(cx-1, cz,   'v', cx,   cz);
+      tryMove(cx,   cz+1, 'h', cx,   cz+1);
+      tryMove(cx,   cz-1, 'h', cx,   cz);
+    }
+
+    const uc = [];
+    for (let x = 0; x < fp.width; x++)
+      for (let z = 0; z < fp.depth; z++)
+        if (fp.cells[x][z] >= 1 && !reached[x][z]) uc.push([x, z]);
+    unreachableCells[0] = uc;
+    if (uc.length) warnings.push(`Ground floor: ${uc.length} unreachable cell(s) — shown in red`);
+  }
+
+  // Fill upper floors with empty arrays
+  for (let f = 1; f < bd.floors.length; f++) unreachableCells[f] = [];
+
+  // 4. Stairwell continuity (informational)
+  if (bd.floors.length > 1) {
+    let hasAnyStair = false;
+    for (const fp of bd.floors)
+      for (let x = 0; x < fp.width; x++)
+        for (let z = 0; z < fp.depth; z++)
+          if (fp.cells[x][z] === 3) hasAnyStair = true;
+    if (!hasAnyStair)
+      warnings.push(`${bd.floors.length}-floor building has no stairwell cells (stairs not yet implemented)`);
+  }
+
+  // Summary
+  const ok = errors.length === 0 && warnings.length === 0;
+
+  return { ok, errors, warnings, unreachableCells };
+}
+
+function displayValidation(results) {
+  const list = document.getElementById('validation-list');
+  list.innerHTML = '';
+
+  if (!results) return;
+
+  if (results.ok) {
+    const li = document.createElement('li');
+    li.className = 'ok';
+    li.textContent = '✓ No issues found';
+    list.appendChild(li);
+    return;
+  }
+
+  for (const msg of results.errors) {
+    const li = document.createElement('li');
+    li.className = 'err';
+    li.textContent = '✗ ' + msg;
+    list.appendChild(li);
+  }
+  for (const msg of results.warnings) {
+    const li = document.createElement('li');
+    li.className = 'warn';
+    li.textContent = '⚠ ' + msg;
+    list.appendChild(li);
+  }
+}
+
+// ─── UI Update ────────────────────────────────────────────────────────────────
+
+function updateUI() {
+  const bd = state.buildingDef;
+  if (!bd) return;
+
+  // Sync floor dropdown
+  const sel = document.getElementById('sel-floor');
+  const prevFloor = +sel.value;
+  sel.innerHTML = '';
+  for (let f = 0; f < bd.floors.length; f++) {
+    const opt = document.createElement('option');
+    opt.value = f;
+    opt.textContent = f;
+    sel.appendChild(opt);
+  }
+  sel.value = state.currentFloor;
+
+  // Stats in header
+  const fp = bd.floors[state.currentFloor];
+  document.getElementById('header').title =
+    `${bd.archetype} · ${bd.footprintW}×${bd.footprintD} · ${bd.floors.length} floor(s) · seed ${state.seed}`;
+
+  displayValidation(state.validationResults);
+}
+
+// ─── Export ───────────────────────────────────────────────────────────────────
+
+function downloadJSON() {
+  const bd = state.buildingDef;
+  if (!bd) return;
+
+  const json = JSON.stringify(bd, (key, val) => {
+    if (val instanceof Set)       return [...val];
+    if (val instanceof Uint8Array) return Array.from(val);
+    return val;
+  }, 2);
+
+  const blob = new Blob([json], { type: 'application/json' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `building_${bd.archetype}_${state.seed}.json`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(a.href);
+}
+
+// ─── Event Wiring ─────────────────────────────────────────────────────────────
+
+document.getElementById('sel-archetype').addEventListener('change', e => {
+  state.archetype = e.target.value;
+  regenerate();
+});
+
+document.getElementById('inp-seed').addEventListener('change', e => {
+  state.seed = Math.max(0, parseInt(e.target.value) || 0);
+  e.target.value = state.seed;
+  regenerate();
+});
+
+document.getElementById('btn-regen').addEventListener('click', () => {
+  regenerate();
+});
+
+document.getElementById('btn-random').addEventListener('click', () => {
+  state.seed = Math.floor(Math.random() * 0xFFFFFF);
+  document.getElementById('inp-seed').value = state.seed;
+  regenerate();
+});
+
+document.getElementById('sel-floor').addEventListener('change', e => {
+  state.currentFloor = +e.target.value;
+  applyFloorVisibility();
+  draw2D();
+});
+
+document.querySelectorAll('[data-toggle]').forEach(cb => {
+  const key = cb.dataset.toggle;
+  cb.checked = !!state.toggles[key];
+  cb.addEventListener('change', () => {
+    state.toggles[key] = cb.checked;
+    draw2D();
+  });
+});
+
+document.getElementById('btn-copy-seed').addEventListener('click', () => {
+  navigator.clipboard.writeText(String(state.seed)).then(() => {
+    const btn = document.getElementById('btn-copy-seed');
+    const orig = btn.textContent;
+    btn.textContent = 'Copied!';
+    setTimeout(() => btn.textContent = orig, 1200);
+  });
+});
+
+document.getElementById('btn-dump-json').addEventListener('click', downloadJSON);
+
+// Hover tooltip
+planCanvas.addEventListener('mousemove', e => {
+  const fp = state.buildingDef?.floors[state.currentFloor];
+  if (!fp) { tooltip.style.display = 'none'; return; }
+
+  const rect = planCanvas.getBoundingClientRect();
+  const mx = (e.clientX - rect.left) * (parseInt(planCanvas.style.width) / rect.width);
+  const my = (e.clientY - rect.top)  * (parseInt(planCanvas.style.height) / rect.height);
+
+  const { cellPx, offsetX, offsetZ } = getScale(fp);
+  const cx = Math.floor((mx - offsetX) / cellPx);
+  const cz = fp.depth - 1 - Math.floor((my - offsetZ) / cellPx);
+
+  if (cx < 0 || cx >= fp.width || cz < 0 || cz >= fp.depth) {
+    tooltip.style.display = 'none';
+    return;
+  }
+
+  const cellType = fp.cells[cx][cz];
+  const name = CELL_NAMES[cellType] ?? '?';
+  tooltip.textContent = `(${cx}, ${cz}) — ${name}`;
+  tooltip.style.left = (e.clientX + 14) + 'px';
+  tooltip.style.top  = (e.clientY - 22) + 'px';
+  tooltip.style.display = 'block';
+});
+
+planCanvas.addEventListener('mouseleave', () => {
+  tooltip.style.display = 'none';
+});
+
+// ─── Animation Loop ───────────────────────────────────────────────────────────
+
+function animate() {
+  requestAnimationFrame(animate);
+  controls.update();
+  renderer.render(scene, camera);
+}
+animate();
+
+// ─── Init ─────────────────────────────────────────────────────────────────────
+regenerate();
+
+</script>
+</body>
+</html>
