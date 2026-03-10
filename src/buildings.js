@@ -3,6 +3,7 @@
 // Pipeline: Footprint → Rooms (BSP) → Doors → Windows → Panel Instantiation
 import * as THREE from 'three';
 import { registerPanel, registerProp, nextSlabGroupId, panels, panelsByWall } from './destruction.js';
+import { collisionWorld } from './collision.js';
 
 // ─── §4 Panel types ──────────────────────────────────────────────────────────
 export const PANEL_TYPES = {
@@ -479,6 +480,9 @@ function placeDoors(floorplan, rooms, rng, isGround) {
 function placeWindows(floorplan, archetype, windowDensity, floorIdx, rng) {
   const { cells: grid, walls, doors, windows, width, depth } = floorplan;
 
+  // Glass walls (office, storefront) are exempt from the no-window-next-to-door rule.
+  const isGlassWallArch = archetype === 'office';
+
   // h-walls
   for (let x = 0; x < width; x++) {
     for (let z = 0; z <= depth; z++) {
@@ -492,6 +496,11 @@ function placeWindows(floorplan, archetype, windowDensity, floorIdx, rng) {
       const atLeftJunction  = (z > 0 && walls.v[x]?.[z-1]) || (z < depth && walls.v[x]?.[z]);
       const atRightJunction = (z > 0 && walls.v[x+1]?.[z-1]) || (z < depth && walls.v[x+1]?.[z]);
       if (atLeftJunction || atRightJunction) continue;
+      // No window next to a door (glass walls exempt)
+      const isStorefront = archetype === 'strip_mall' && z === 0;
+      if (!isGlassWallArch && !isStorefront) {
+        if (doors.has(dKey('h', x - 1, z)) || doors.has(dKey('h', x + 1, z))) continue;
+      }
       // Archetype rules
       if (archetype === 'warehouse' && floorIdx === 0) continue;
       let density = windowDensity;
@@ -513,6 +522,10 @@ function placeWindows(floorplan, archetype, windowDensity, floorIdx, rng) {
       const atBotJunction = (x > 0 && walls.h[x-1]?.[z]) || (x < width && walls.h[x]?.[z]);
       const atTopJunction = (x > 0 && walls.h[x-1]?.[z+1]) || (x < width && walls.h[x]?.[z+1]);
       if (atBotJunction || atTopJunction) continue;
+      // No window next to a door (glass walls exempt)
+      if (!isGlassWallArch) {
+        if (doors.has(dKey('v', x, z - 1)) || doors.has(dKey('v', x, z + 1))) continue;
+      }
       if (archetype === 'warehouse' && floorIdx === 0) continue;
       let density = windowDensity;
       if (archetype === 'strip_mall') density = 0.08;
@@ -1261,7 +1274,213 @@ export function instantiateBuilding(buildingDef, wx, wy, wz) {
     addWarehouseCatwalk(group, buildingDef, wx, wy, wz);
   }
 
+  // ── Generate collision data and register with CollisionWorld ──────────────
+  const collisionData = generateCollisionData(buildingDef, buildingId);
+  collisionWorld.addBuilding(buildingId, {
+    worldX: wx, worldY: wy, worldZ: wz,
+    footprintW: buildingDef.footprintW,
+    footprintD: buildingDef.footprintD,
+    totalH: floors.length * heightPerFloor,
+    ...collisionData,
+  });
+
+  group.userData.buildingId = buildingId;
   return group;
+}
+
+// ─── Collision data generation ────────────────────────────────────────────────
+
+function generateCollisionData(buildingDef, buildingId) {
+  const { floors, heightPerFloor, footprintW, footprintD } = buildingDef;
+  const slabThick = 0.1;
+  const wallColliders = [];
+  const floorColliders = [];
+  const propColliders = [];
+  const stairColliders = [];
+
+  for (let f = 0; f < floors.length; f++) {
+    const fp = floors[f];
+    const { cells: grid, walls, doors, width, depth } = fp;
+    const wallBaseY = f * heightPerFloor + slabThick;
+    const clearH = heightPerFloor - slabThick;
+    const wallRows = Math.ceil(clearH);
+    const panelH = clearH / wallRows;
+    const DOOR_H = 2.0;
+
+    // ── Floor collider (with void grid) ───────────────────────────────────
+    const voidGrid = new Uint8Array(width * depth);
+    for (let x = 0; x < width; x++) {
+      for (let z = 0; z < depth; z++) {
+        // 0 = exterior, 3 = stairwell void → mark as void (1)
+        if (grid[x][z] === 0 || grid[x][z] === 3) voidGrid[x * depth + z] = 1;
+      }
+    }
+    floorColliders.push({
+      aabb: { minX: 0, maxX: footprintW, minY: f * heightPerFloor, maxY: f * heightPerFloor + slabThick, minZ: 0, maxZ: footprintD },
+      floor: f, voidGrid, width, depth,
+    });
+
+    // Ceiling collider (for head collision)
+    floorColliders.push({
+      aabb: { minX: 0, maxX: footprintW, minY: (f + 1) * heightPerFloor - slabThick, maxY: (f + 1) * heightPerFloor, minZ: 0, maxZ: footprintD },
+      floor: f, voidGrid, width, depth,
+    });
+
+    // ── H-wall colliders ──────────────────────────────────────────────────
+    for (let z = 0; z <= depth; z++) {
+      // Find contiguous wall runs along x, breaking at doors
+      let runStart = -1;
+      for (let x = 0; x <= width; x++) {
+        const hasWall = x < width && walls.h[x]?.[z];
+        // Check if both sides are exterior (skip these walls)
+        const above = z < depth ? grid[x]?.[z] : 0;
+        const below = z > 0 ? grid[x]?.[z - 1] : 0;
+        const isRelevant = hasWall && (above !== 0 || below !== 0);
+
+        if (isRelevant) {
+          if (runStart < 0) runStart = x;
+        } else {
+          if (runStart >= 0) {
+            emitHWallCollider(wallColliders, runStart, x, z, f, wallBaseY, clearH, wallRows, panelH, DOOR_H, doors, buildingId);
+            runStart = -1;
+          }
+        }
+      }
+    }
+
+    // ── V-wall colliders ──────────────────────────────────────────────────
+    for (let x = 0; x <= width; x++) {
+      let runStart = -1;
+      for (let z = 0; z <= depth; z++) {
+        const hasWall = z < depth && walls.v[x]?.[z];
+        const left = x > 0 ? grid[x - 1]?.[z] : 0;
+        const right = x < width ? grid[x]?.[z] : 0;
+        const isRelevant = hasWall && (left !== 0 || right !== 0);
+
+        if (isRelevant) {
+          if (runStart < 0) runStart = z;
+        } else {
+          if (runStart >= 0) {
+            emitVWallCollider(wallColliders, x, runStart, z, f, wallBaseY, clearH, wallRows, panelH, DOOR_H, doors, buildingId);
+            runStart = -1;
+          }
+        }
+      }
+    }
+
+    // ── Prop colliders ────────────────────────────────────────────────────
+    for (const { x, z, type } of fp.props ?? []) {
+      const def = PROP_DEFS[type];
+      if (!def) continue;
+      propColliders.push({
+        minX: x + 0.05, maxX: x + def.w + 0.05,
+        minY: f * heightPerFloor + slabThick, maxY: f * heightPerFloor + slabThick + def.h,
+        minZ: z + 0.05, maxZ: z + def.d + 0.05,
+      });
+    }
+  }
+
+  // ── Stair colliders ───────────────────────────────────────────────────────
+  for (const sw of buildingDef.stairwells ?? []) {
+    for (let f = 0; f < floors.length - 1; f++) {
+      const baseY = f * heightPerFloor + slabThick;
+      const STEPS = 10;
+      const stepH = heightPerFloor / STEPS;
+      const stepRun = 2 / STEPS; // 0.2m per step
+      for (let i = 0; i < STEPS; i++) {
+        const y = baseY + i * stepH;
+        const off = i * stepRun;
+        if (sw.axis === 'x') {
+          stairColliders.push({
+            minX: sw.x + off, maxX: sw.x + off + stepRun,
+            minY: y, maxY: y + stepH,
+            minZ: sw.z, maxZ: sw.z + 1.0,
+          });
+        } else {
+          stairColliders.push({
+            minX: sw.x, maxX: sw.x + 1.0,
+            minY: y, maxY: y + stepH,
+            minZ: sw.z + off, maxZ: sw.z + off + stepRun,
+          });
+        }
+      }
+    }
+  }
+
+  return { wallColliders, floorColliders, propColliders, stairColliders };
+}
+
+function emitHWallCollider(out, x0, x1, z, f, wallBaseY, clearH, wallRows, panelH, doorH, doors, buildingId) {
+  // H-wall at row z runs from x0 to x1 (exclusive)
+  // Break into sub-runs at door positions
+  let segStart = x0;
+  for (let x = x0; x <= x1; x++) {
+    const isDoor = x < x1 && doors.has(dKey('h', x, z));
+    if (isDoor || x === x1) {
+      if (x > segStart) {
+        const panelsWide = x - segStart;
+        const mask = new Uint8Array(panelsWide * wallRows).fill(1);
+        const wallKey = 'h:' + z + ':' + segStart + '-' + x;
+        out.push({
+          aabb: { minX: segStart, maxX: x, minY: wallBaseY, maxY: wallBaseY + clearH, minZ: z, maxZ: z + 0.1 },
+          axis: 'h', mask, gridStart: segStart, gridY0: f * wallRows,
+          panelsWide, panelsHigh: wallRows, wallKey, panelRowOffset: 0, floor: f,
+        });
+      }
+      if (isDoor) {
+        // Door: emit lintel-only collider (panels above door height)
+        const doorPanels = Math.floor(doorH / panelH);
+        const lintelPanels = wallRows - doorPanels;
+        if (lintelPanels > 0) {
+          const mask = new Uint8Array(1 * lintelPanels).fill(1);
+          const wallKey = 'h:' + z + ':' + x + '-' + (x + 1) + ':lintel';
+          out.push({
+            aabb: { minX: x, maxX: x + 1, minY: wallBaseY + doorPanels * panelH, maxY: wallBaseY + clearH, minZ: z, maxZ: z + 0.1 },
+            axis: 'h', mask, gridStart: x, gridY0: f * wallRows + doorPanels,
+            panelsWide: 1, panelsHigh: lintelPanels, wallKey, panelRowOffset: doorPanels, floor: f,
+          });
+        }
+        segStart = x + 1;
+      } else {
+        segStart = x;
+      }
+    }
+  }
+}
+
+function emitVWallCollider(out, x, z0, z1, f, wallBaseY, clearH, wallRows, panelH, doorH, doors, buildingId) {
+  let segStart = z0;
+  for (let z = z0; z <= z1; z++) {
+    const isDoor = z < z1 && doors.has(dKey('v', x, z));
+    if (isDoor || z === z1) {
+      if (z > segStart) {
+        const panelsWide = z - segStart;
+        const mask = new Uint8Array(panelsWide * wallRows).fill(1);
+        const wallKey = 'v:' + x + ':' + segStart + '-' + z;
+        out.push({
+          aabb: { minX: x, maxX: x + 0.1, minY: wallBaseY, maxY: wallBaseY + clearH, minZ: segStart, maxZ: z },
+          axis: 'v', mask, gridStart: segStart, gridY0: f * wallRows,
+          panelsWide, panelsHigh: wallRows, wallKey, panelRowOffset: 0, floor: f,
+        });
+      }
+      if (isDoor) {
+        const doorPanels = Math.floor(doorH / panelH);
+        const lintelPanels = wallRows - doorPanels;
+        if (lintelPanels > 0) {
+          const mask = new Uint8Array(1 * lintelPanels).fill(1);
+          const wallKey = 'v:' + x + ':' + z + '-' + (z + 1) + ':lintel';
+          out.push({
+            aabb: { minX: x, maxX: x + 0.1, minY: wallBaseY + doorPanels * panelH, maxY: wallBaseY + clearH, minZ: z, maxZ: z + 1 },
+            axis: 'v', mask, gridStart: z, gridY0: f * wallRows + doorPanels,
+            panelsWide: 1, panelsHigh: lintelPanels, wallKey, panelRowOffset: doorPanels, floor: f,
+          });
+        }
+        segStart = z + 1;
+      } else {
+        segStart = z;
+      }
+    }
+  }
 }
 
 // ─── Destruction re-splitting ─────────────────────────────────────────────────

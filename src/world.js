@@ -7,6 +7,7 @@ import { generateTerrainChunk, getHeight } from './terrain.js';
 import { generateCoverPoints, removeCoverPoints } from './cover.js';
 import { generateBuilding, spawnBuilding } from './buildings.js';
 import { getBiomeAt, selectArchetype } from './biomes.js';
+import { collisionWorld } from './collision.js';
 const _foundationMat = new THREE.MeshLambertMaterial({ color: 0x5a5a5a });
 
 // ─── CHUNK MAP ─────────────────────────────────────────────
@@ -29,6 +30,7 @@ export function generateChunk(cx, cz) {
 
   // Collision boxes for this chunk
   const chunkColliders = [];
+  const buildingIds = [];
 
   // Buildings in 4 quadrants (avoid roads in center)
   const quadrants = [
@@ -69,6 +71,7 @@ export function generateChunk(cx, cz) {
 
     const bGroup = spawnBuilding(buildingDef, bx, groundY, bz);
     group.add(bGroup);
+    if (bGroup.userData.buildingId !== undefined) buildingIds.push(bGroup.userData.buildingId);
 
     // Foundation skirt: solid concrete box from foundY up to groundY.
     // Extended +0.1m in X and Z to cover wall overhang at those edges.
@@ -94,7 +97,7 @@ export function generateChunk(cx, cz) {
   if (rng() > 0.5) spawnPickup(ox + 10 + rng() * (CHUNK_SIZE - 20), oz + 10 + rng() * (CHUNK_SIZE - 20), 'ammo', key);
 
   scene.add(group);
-  chunks.set(key, { group, colliders: chunkColliders });
+  chunks.set(key, { group, colliders: chunkColliders, buildingIds });
   markCollidersDirty();
 
   // Generate cover points from building edges
@@ -107,6 +110,7 @@ export function removeChunk(cx, cz) {
   if (!chunk) return;
   scene.remove(chunk.group);
   chunk.group.traverse(obj => { if (obj.geometry) obj.geometry.dispose(); });
+  for (const bid of chunk.buildingIds ?? []) collisionWorld.removeBuilding(bid);
   clearEnemiesInChunk(key);
   clearPickupsInChunk(key);
   removeCoverPoints(key);

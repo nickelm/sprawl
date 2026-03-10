@@ -1,6 +1,7 @@
 // Destruction system — panel and prop registry
 // Tracks panel data (HP, type, vertex offsets) and handles slab re-splitting
 // when panels in merged meshes are destroyed.
+import { collisionWorld } from './collision.js';
 
 export const panels        = new Map(); // panelId → panelData
 export const props         = new Map(); // propId  → propData
@@ -39,7 +40,10 @@ export function damagePanel(id, amount) {
   const p = panels.get(id);
   if (!p) return;
   p.hp = Math.max(0, p.hp - amount);
-  // When HP reaches 0, the containing merged slab should be re-split.
+  // When HP reaches 0, update collision bitmask so destroyed panels become passable.
+  if (p.hp <= 0 && p.wallId !== undefined) {
+    collisionWorld.destroyPanel(p.buildingId, p.wallId, p.gridX, p.gridY);
+  }
   // The caller (weapons/player) is responsible for triggering rebuildMergedSlab()
   // via the buildings module, passing p.buildingId and p.wallId.
   return p.hp;
