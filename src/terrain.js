@@ -3,7 +3,11 @@ import { CHUNK_SIZE } from './state.js';
 import { createPerlin } from './utils.js';
 
 // ─── NOISE SETUP ────────────────────────────────────────────
-const perlin = createPerlin(42317);
+let perlin = createPerlin(42317);
+
+export function reseedTerrain(seed) {
+  perlin = createPerlin(seed);
+}
 
 // ─── CONSTANTS ──────────────────────────────────────────────
 const SEGMENTS = 32;                   // quads per side → 33×33 vertices

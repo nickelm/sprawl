@@ -1,8 +1,10 @@
 import { STATE, enemies } from './state.js';
 import { camera } from './renderer.js';
 import { spawnEnemy } from './enemies.js';
-import { getAllColliders } from './world.js';
-import { updateWaveHUD, showWaveAnnounce, updateHUD } from './hud.js';
+import { getAllColliders, spawnWeaponCrate, clearWeaponCrates } from './world.js';
+import { updateWaveHUD, showWaveAnnounce, updateHUD, showAttachmentChoice } from './hud.js';
+import { getRandomInteriorPositions } from './nav.js';
+import { generateRandomWeapon, getCompatibleAttachments, ATTACHMENT_DEFS } from './weaponDefs.js';
 
 // ─── WAVE DEFINITIONS ──────────────────────────────────────
 // Returns { total, types } for a given wave number
@@ -10,7 +12,7 @@ function getWaveConfig(wave) {
   if (wave <= 3) {
     // Waves 1-3: Riflemen only, 5-8 enemies
     const total = 5 + Math.floor(Math.random() * 4);
-    return { total, types: [{ isRanged: true, healthMult: 1, weight: 1 }] };
+    return { total, types: [{ isRanged: true, healthMult: 1, weight: 1, enemyType: 'rifleman' }] };
   }
   if (wave <= 6) {
     // Waves 4-6: + Flankers (melee), 10-15 enemies
@@ -18,8 +20,8 @@ function getWaveConfig(wave) {
     return {
       total,
       types: [
-        { isRanged: true, healthMult: 1, weight: 3 },
-        { isRanged: false, healthMult: 1, weight: 2 },
+        { isRanged: true, healthMult: 1, weight: 3, enemyType: 'rifleman' },
+        { isRanged: true, healthMult: 1, weight: 2, enemyType: 'flanker' },
       ],
     };
   }
@@ -29,9 +31,9 @@ function getWaveConfig(wave) {
     return {
       total,
       types: [
-        { isRanged: true, healthMult: 1, weight: 3 },
-        { isRanged: false, healthMult: 1, weight: 2 },
-        { isRanged: true, healthMult: 2.5, weight: 1 },  // heavy
+        { isRanged: true, healthMult: 1, weight: 3, enemyType: 'rifleman' },
+        { isRanged: true, healthMult: 1, weight: 2, enemyType: 'flanker' },
+        { isRanged: true, healthMult: 2.5, weight: 1, enemyType: 'heavy' },
       ],
     };
   }
@@ -40,9 +42,9 @@ function getWaveConfig(wave) {
   return {
     total,
     types: [
-      { isRanged: true, healthMult: 1, weight: 3 },
-      { isRanged: false, healthMult: 1, weight: 2 },
-      { isRanged: true, healthMult: 2.5, weight: 1 },  // heavy
+      { isRanged: true, healthMult: 1, weight: 3, enemyType: 'rifleman' },
+      { isRanged: true, healthMult: 1, weight: 2, enemyType: 'flanker' },
+      { isRanged: true, healthMult: 2.5, weight: 1, enemyType: 'heavy' },
     ],
   };
 }
@@ -189,6 +191,9 @@ function startNextWave() {
   waveConfig = getWaveConfig(STATE.wave);
   waveDirections = pickWaveDirections(STATE.wave);
 
+  // Clear weapon crates when new wave starts
+  clearWeaponCrates();
+
   STATE.waveActive = true;
   STATE.wavePause = false;
   STATE.waveEnemiesTotal = waveConfig.total;
@@ -215,20 +220,64 @@ function endWave() {
   STATE.health = Math.min(STATE.maxHealth, STATE.health + 20);
 
   updateHUD();
+
+  // Spawn weapon crates nearby (Step 14a)
+  clearWeaponCrates();
+  const px = camera.position.x, pz = camera.position.z;
+  const crateCount = 1 + (STATE.wave >= 5 ? 1 : 0); // 2 crates from wave 5+
+  for (let i = 0; i < crateCount; i++) {
+    const angle = Math.random() * Math.PI * 2;
+    const dist = 15 + Math.random() * 10; // 15-25m away
+    const cx = px + Math.cos(angle) * dist;
+    const cz = pz + Math.sin(angle) * dist;
+    spawnWeaponCrate(cx, cz, generateRandomWeapon(STATE.wave));
+  }
+
+  // Attachment reward every 3rd wave (Step 14d)
+  if (STATE.wave > 0 && STATE.wave % 3 === 0) {
+    const compatible = getCompatibleAttachments(STATE.currentWeapon);
+    if (compatible.length >= 2) {
+      // Pick 2 random distinct attachments
+      const shuffled = compatible.sort(() => Math.random() - 0.5);
+      const options = shuffled.slice(0, 2);
+      showAttachmentChoice(options);
+    }
+  }
 }
 
 function spawnWaveEnemy() {
   if (!waveConfig) return;
   const colliders = getAllColliders();
-  const pos = findSpawnPosition(colliders);
   const type = pickEnemyType(waveConfig.types);
 
-  const enemy = spawnEnemy(pos.x, pos.z, type.isRanged, null);
+  // ~40% chance to spawn indoors for testing interior navigation
+  let pos = null;
+  let yOverride = null;
+  if (Math.random() < 0.4) {
+    const indoor = getRandomInteriorPositions(1);
+    if (indoor.length > 0) {
+      pos = indoor[0];
+      yOverride = pos.y;
+    }
+  }
+  if (!pos) {
+    pos = findSpawnPosition(colliders);
+  }
+
+  const enemy = spawnEnemy(pos.x, pos.z, type.isRanged, null, yOverride, type.enemyType || 'rifleman');
   if (enemy) {
     // Apply health multiplier for heavies
     if (type.healthMult !== 1) {
       enemy.health = Math.round(enemy.health * type.healthMult);
       enemy.maxHealth = enemy.health;
+    }
+    // Set building-awareness for indoor-spawned enemies so they don't
+    // collide with the building's outer AABB or snap to terrain height
+    if (yOverride != null && pos.buildingId != null) {
+      enemy.insideBuildingId = pos.buildingId;
+      enemy._insideBuildingCollider = colliders.find(c =>
+        pos.x >= c.minX && pos.x <= c.maxX && pos.z >= c.minZ && pos.z <= c.maxZ
+      ) || null;
     }
     waveEnemySet.add(enemy);
   }

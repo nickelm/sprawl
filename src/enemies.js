@@ -1,7 +1,8 @@
 import * as THREE from 'three';
 import {
-  STATE, enemies, pickups, enemyBullets,
-  ENEMY_MELEE_RANGE, ENEMY_SHOOT_RANGE, ENEMY_MELEE_DAMAGE, ENEMY_BULLET_DAMAGE,
+  STATE, enemies, pickups,
+  ENEMY_MELEE_RANGE, ENEMY_SHOOT_RANGE, ENEMY_MELEE_DAMAGE,
+  ENEMY_WEAPON_STATS,
   ENGAGE_RANGE, RETREAT_HEALTH_PCT, PEEK_DURATION, PEEK_OFFSET,
   COVER_WAIT_MIN, COVER_WAIT_MAX, COVER_TIMEOUT, COVER_SEARCH_RADIUS,
 } from './state.js';
@@ -14,6 +15,8 @@ import {
   findBestCover, findAdvanceCover, findFlankCover,
   reserveCover, releaseCover,
 } from './cover.js';
+import { fireBullet } from './ballistics.js';
+import { isSuppressed } from './weapons.js';
 
 export { hasLineOfSight };
 
@@ -25,7 +28,7 @@ const DAMAGE_REACT_MS = 1500; // react to damage within this window
 const PEEK_LEAN_TIME = 0.3;   // seconds to lean out / back
 const PEEK_FIRE_START = 0.3;  // start firing after this
 const PEEK_FIRE_END = 1.0;    // stop firing at this
-const BURST_INTERVAL = 300;   // ms between shots in a burst
+// Burst interval now comes from ENEMY_WEAPON_STATS[type].fireRate
 
 // ─── BUILDING COLLISION ─────────────────────────────────────
 function enemyCollidesWithBuilding(x, z, colliders) {
@@ -40,24 +43,8 @@ function enemyCollidesWithBuilding(x, z, colliders) {
 
 // ─── LINE OF SIGHT (imported from nav.js, re-exported) ────
 
-// Check if a bullet position is inside any building collider
-function bulletHitsBuilding(x, y, z, colliders) {
-  for (const c of colliders) {
-    if (x > c.minX && x < c.maxX && z > c.minZ && z < c.maxZ &&
-        y > c.minY && y < c.maxY) {
-      return true;
-    }
-  }
-  return false;
-}
-
-// ─── SHARED BULLET GEOMETRY ────────────────────────────────
-const bulletGeo = new THREE.SphereGeometry(0.05, 4, 4);
-const enemyBulletMat = new THREE.MeshBasicMaterial({ color: 0xff4444 });
-const _bulletPool = [];
-
 // ─── MOVEMENT HELPER ──────────────────────────────────────
-function moveEnemy(enemy, targetX, targetZ, speed, dt, colliders) {
+function moveEnemy(enemy, targetX, targetZ, speed, dt, colliders, targetY) {
   const dx = targetX - enemy.mesh.position.x;
   const dz = targetZ - enemy.mesh.position.z;
   const dist = Math.sqrt(dx * dx + dz * dz);
@@ -66,15 +53,28 @@ function moveEnemy(enemy, targetX, targetZ, speed, dt, colliders) {
   const nx = enemy.mesh.position.x + (dx / dist) * speed * dt;
   const nz = enemy.mesh.position.z + (dz / dist) * speed * dt;
   let moved = false;
-  if (!enemyCollidesWithBuilding(nx, enemy.mesh.position.z, colliders)) {
+
+  // When inside a building, filter out that building's collider
+  const effectiveColliders = enemy.insideBuildingId != null
+    ? colliders.filter(c => c !== enemy._insideBuildingCollider)
+    : colliders;
+
+  if (!enemyCollidesWithBuilding(nx, enemy.mesh.position.z, effectiveColliders)) {
     enemy.mesh.position.x = nx;
     moved = true;
   }
-  if (!enemyCollidesWithBuilding(enemy.mesh.position.x, nz, colliders)) {
+  if (!enemyCollidesWithBuilding(enemy.mesh.position.x, nz, effectiveColliders)) {
     enemy.mesh.position.z = nz;
     moved = true;
   }
-  enemy.mesh.position.y = getHeight(enemy.mesh.position.x, enemy.mesh.position.z);
+
+  // Use interior Y when following an interior path, otherwise terrain height
+  // When inside a building with no targetY, keep current Y to avoid snapping underground
+  if (targetY !== undefined) {
+    enemy.mesh.position.y = targetY;
+  } else if (enemy.insideBuildingId == null) {
+    enemy.mesh.position.y = getHeight(enemy.mesh.position.x, enemy.mesh.position.z);
+  }
   return moved;
 }
 
@@ -86,13 +86,28 @@ function followPath(enemy, dt, colliders) {
   const dx = wp.x - enemy.mesh.position.x;
   const dz = wp.z - enemy.mesh.position.z;
   if (Math.sqrt(dx * dx + dz * dz) < WAYPOINT_REACH) {
+    // Track building entry/exit when crossing portal waypoints
+    if (wp._portal) {
+      if (enemy.insideBuildingId == null) {
+        // Entering a building
+        enemy.insideBuildingId = wp._buildingId;
+        // Cache the building's collider AABB for exclusion
+        enemy._insideBuildingCollider = colliders.find(c =>
+          wp.x >= c.minX && wp.x <= c.maxX && wp.z >= c.minZ && wp.z <= c.maxZ
+        ) || null;
+      } else {
+        // Exiting a building
+        enemy.insideBuildingId = null;
+        enemy._insideBuildingCollider = null;
+      }
+    }
     enemy.pathNode++;
     if (enemy.pathNode >= enemy.path.length) return false;
   }
 
   if (enemy.pathNode < enemy.path.length) {
     const t = enemy.path[enemy.pathNode];
-    moveEnemy(enemy, t.x, t.z, enemy.speed, dt, colliders);
+    moveEnemy(enemy, t.x, t.z, enemy.speed, dt, colliders, t.y);
     return true;
   }
   return false;
@@ -103,7 +118,8 @@ function pathTo(enemy, tx, tz, colliders) {
   const result = findPath(
     { x: enemy.mesh.position.x, z: enemy.mesh.position.z },
     { x: tx, z: tz },
-    colliders
+    colliders,
+    enemy.insideBuildingId
   );
   if (result) {
     enemy.path = result;
@@ -149,7 +165,7 @@ function changeState(enemy, newState) {
 }
 
 // ─── ENEMY SPAWNING ────────────────────────────────────────
-export function spawnEnemy(x, z, isRanged, ck) {
+export function spawnEnemy(x, z, isRanged, ck, yOverride, enemyType = 'rifleman') {
   const mat = isRanged ? enemyRangedMat : enemyMeleeMat;
 
   const group = new THREE.Group();
@@ -172,20 +188,38 @@ export function spawnEnemy(x, z, isRanged, ck) {
   group.add(legR);
 
   if (isRanged) {
-    const gun = new THREE.Mesh(
-      new THREE.BoxGeometry(0.1, 0.1, 0.6),
-      new THREE.MeshLambertMaterial({ color: 0x333333 })
-    );
-    gun.position.set(0.4, 1.1, 0.2);
+    // Per-type weapon geometry (Step 15d)
+    const gunMat = new THREE.MeshLambertMaterial({ color: 0x333333 });
+    let gun;
+    if (enemyType === 'flanker') {
+      // SMG: shorter, stubbier
+      gun = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.08, 0.35), gunMat);
+      gun.position.set(0.38, 1.1, 0.15);
+    } else if (enemyType === 'heavy') {
+      // LMG: longer, thicker, box mag underneath
+      gun = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.12, 0.8), gunMat);
+      gun.position.set(0.42, 1.1, 0.25);
+      const boxMag = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.08, 0.06), gunMat);
+      boxMag.position.set(0.42, 1.0, 0.15);
+      group.add(boxMag);
+    } else {
+      // Rifleman (AR): standard
+      gun = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.1, 0.6), gunMat);
+      gun.position.set(0.4, 1.1, 0.2);
+    }
     group.add(gun);
   }
 
-  group.position.set(x, getHeight(x, z), z);
+  // Tag all enemy meshes as hot for thermal rendering
+  group.traverse(c => { if (c.isMesh) c.userData.isHot = true; });
+
+  group.position.set(x, yOverride != null ? yOverride : getHeight(x, z), z);
   scene.add(group);
 
   const enemy = {
     mesh: group,
     isRanged,
+    enemyType,
     health: isRanged ? 30 : 50,
     maxHealth: isRanged ? 30 : 50,
     speed: isRanged ? 2.5 : 4,
@@ -209,6 +243,9 @@ export function spawnEnemy(x, z, isRanged, ck) {
     burstCount: 0,
     lastDamagedTime: 0,
     coverSearchCooldown: 0,
+    // Interior nav tracking
+    insideBuildingId: null,
+    _insideBuildingCollider: null,
     // Hit flinch
     flinchX: 0,
     flinchZ: 0,
@@ -219,6 +256,9 @@ export function spawnEnemy(x, z, isRanged, ck) {
     deathTimer: 0,
     deathSpinStart: 0,
     deathY: 0,
+    // Sound/flash detection (Step 15)
+    alerted: false,
+    lastKnownPlayerPos: null,
   };
   enemies.push(enemy);
   return enemy;
@@ -260,33 +300,58 @@ export function clearPickupsInChunk(key) {
 }
 
 export function clearAllEnemyBullets() {
-  for (const b of enemyBullets) {
-    b.mesh.visible = false;
-    _bulletPool.push(b);
-  }
-  enemyBullets.length = 0;
+  // No-op: enemy bullets are now hitscan (instant raycasts)
 }
 
-// ─── ENEMY BULLET SPAWNING ─────────────────────────────────
-function spawnEnemyBullet(enemy) {
-  const dir = camera.position.clone().sub(enemy.mesh.position).normalize();
-  dir.x += (Math.random() - 0.5) * 0.15;
-  dir.y += (Math.random() - 0.5) * 0.1;
-  dir.z += (Math.random() - 0.5) * 0.15;
-  dir.normalize();
+// ─── ENEMY HITSCAN FIRING ──────────────────────────────────
+const _aimDir = new THREE.Vector3();
+const _perpX = new THREE.Vector3();
+const _perpY = new THREE.Vector3();
+let _frameRaycastCount = 0;
 
-  let b = _bulletPool.pop();
-  if (!b) {
-    b = { mesh: new THREE.Mesh(bulletGeo, enemyBulletMat), velocity: new THREE.Vector3(), life: 0 };
-    scene.add(b.mesh);
-  } else {
-    b.mesh.visible = true;
+function fireEnemyBullet(enemy) {
+  if (_frameRaycastCount >= 50) return; // frame budget
+  _frameRaycastCount++;
+
+  const ws = ENEMY_WEAPON_STATS[enemy.enemyType] || ENEMY_WEAPON_STATS.rifleman;
+
+  // Origin: enemy muzzle position
+  const origin = enemy.mesh.position.clone();
+  origin.y += 1.2;
+
+  // Aim at player center mass
+  _aimDir.copy(camera.position).sub(origin).normalize();
+
+  // Apply spread cone
+  const spread = ws.spreadMin + Math.random() * (ws.spreadMax - ws.spreadMin);
+  const angle = Math.random() * Math.PI * 2;
+
+  // Build perpendicular axes for the spread cone
+  _perpX.set(0, 1, 0).cross(_aimDir);
+  if (_perpX.lengthSq() < 0.001) _perpX.set(1, 0, 0).cross(_aimDir);
+  _perpX.normalize();
+  _perpY.crossVectors(_aimDir, _perpX);
+
+  const spreadMag = Math.tan(spread) * Math.random();
+  _aimDir.addScaledVector(_perpX, Math.cos(angle) * spreadMag);
+  _aimDir.addScaledVector(_perpY, Math.sin(angle) * spreadMag);
+  _aimDir.normalize();
+
+  // Fire through unified ballistics pipeline (hits walls, player — not enemies)
+  const hits = fireBullet(origin, _aimDir, {
+    damage: ws.damage,
+    penetration: ws.penetration,
+    range: ws.range,
+  }, { excludeEnemies: true });
+
+  // Process results
+  for (const hit of hits) {
+    if (hit.type === 'player') {
+      takeDamage(hit.damage, origin);
+      break;
+    }
+    // Panel hits (damage + debris) already handled inside fireBullet
   }
-  b.mesh.position.copy(enemy.mesh.position);
-  b.mesh.position.y += 1.2;
-  b.velocity.copy(dir).multiplyScalar(25);
-  b.life = 3;
-  enemyBullets.push(b);
 }
 
 // ─── RANGED AI STATE MACHINE ──────────────────────────────
@@ -511,12 +576,14 @@ function updatePeekShoot(enemy, dt, now, colliders) {
   animateLegs(enemy, dt, false);
 
   // Fire during the peek window
+  const ws = ENEMY_WEAPON_STATS[enemy.enemyType] || ENEMY_WEAPON_STATS.rifleman;
+  const maxBurst = ws.burstSize || 3;
   if (elapsed > PEEK_FIRE_START && elapsed < PEEK_FIRE_END &&
-      enemy.burstCount < 3 && now - enemy.lastAttack > BURST_INTERVAL) {
+      enemy.burstCount < maxBurst && now - enemy.lastAttack > ws.fireRate) {
     if (hasLineOfSight(enemy.mesh.position.x, enemy.mesh.position.z, px, pz, colliders)) {
       enemy.lastAttack = now;
       enemy.burstCount++;
-      spawnEnemyBullet(enemy);
+      fireEnemyBullet(enemy);
     }
   }
 
@@ -659,6 +726,7 @@ export function updateEnemies(dt) {
 
   _pathStagger = (_pathStagger + 1) % Math.max(1, enemies.length);
   _frameCount++;
+  _frameRaycastCount = 0; // reset per-frame raycast budget
 
   for (let i = enemies.length - 1; i >= 0; i--) {
     const enemy = enemies[i];
@@ -672,12 +740,26 @@ export function updateEnemies(dt) {
     }
 
     const toDx = camera.position.x - enemy.mesh.position.x;
+    const toDy = camera.position.y - enemy.mesh.position.y;
     const toDz = camera.position.z - enemy.mesh.position.z;
     const dist = Math.sqrt(toDx * toDx + toDz * toDz);
+    const dist3D = Math.sqrt(toDx * toDx + toDy * toDy + toDz * toDz);
 
     // Distance-based AI LOD — reduce update frequency for distant enemies
     if (dist > LOD_DIST_FAR  && (_frameCount % 8) !== (i % 8)) continue;
     if (dist > LOD_DIST_NEAR && (_frameCount % 4) !== (i % 4)) continue;
+
+    // Muzzle flash LOS detection (Step 15c)
+    // Unsuppressed fire within 50ms alerts enemies with LOS within detection range
+    if (!enemy.alerted && enemy.isRanged && !isSuppressed() &&
+        now - STATE.lastShotTime < 50 && dist < 80) {
+      const ex = enemy.mesh.position.x, ez = enemy.mesh.position.z;
+      const px = camera.position.x, pz = camera.position.z;
+      if (hasLineOfSight(ex, ez, px, pz, colliders)) {
+        enemy.alerted = true;
+        enemy.lastKnownPlayerPos = camera.position.clone();
+      }
+    }
 
     // Face player (overridden in some states)
     enemy.mesh.rotation.y = Math.atan2(toDx, toDz);
@@ -700,18 +782,18 @@ export function updateEnemies(dt) {
         pathTo(enemy, camera.position.x, camera.position.z, colliders);
       }
 
-      animateLegs(enemy, dt, dist > ENEMY_MELEE_RANGE);
+      animateLegs(enemy, dt, dist3D > ENEMY_MELEE_RANGE);
 
-      if (dist > ENEMY_MELEE_RANGE) {
+      if (dist3D > ENEMY_MELEE_RANGE) {
         const moved = followPath(enemy, dt, colliders);
         if (!moved) {
           moveEnemy(enemy, camera.position.x, camera.position.z, enemy.speed, dt, colliders);
         }
       }
 
-      if (dist < ENEMY_MELEE_RANGE && now - enemy.lastAttack > enemy.attackCooldown) {
+      if (dist3D < ENEMY_MELEE_RANGE && now - enemy.lastAttack > enemy.attackCooldown) {
         enemy.lastAttack = now;
-        takeDamage(ENEMY_MELEE_DAMAGE);
+        takeDamage(ENEMY_MELEE_DAMAGE, enemy.mesh.position);
       }
     }
 
@@ -724,35 +806,6 @@ export function updateEnemies(dt) {
     }
   }
 
-  // Update enemy bullets
-  for (let i = enemyBullets.length - 1; i >= 0; i--) {
-    const b = enemyBullets[i];
-    b.mesh.position.x += b.velocity.x * dt;
-    b.mesh.position.y += b.velocity.y * dt;
-    b.mesh.position.z += b.velocity.z * dt;
-    b.life -= dt;
-
-    if (b.mesh.position.distanceTo(camera.position) < 1.0) {
-      takeDamage(ENEMY_BULLET_DAMAGE);
-      b.mesh.visible = false;
-      _bulletPool.push(b);
-      enemyBullets.splice(i, 1);
-      continue;
-    }
-
-    if (bulletHitsBuilding(b.mesh.position.x, b.mesh.position.y, b.mesh.position.z, colliders)) {
-      b.mesh.visible = false;
-      _bulletPool.push(b);
-      enemyBullets.splice(i, 1);
-      continue;
-    }
-
-    if (b.life <= 0) {
-      b.mesh.visible = false;
-      _bulletPool.push(b);
-      enemyBullets.splice(i, 1);
-    }
-  }
 }
 
 // ─── DYING ENEMIES UPDATE ─────────────────────────────────

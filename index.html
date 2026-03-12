@@ -29,25 +29,91 @@
     z-index: 10;
   }
 
-  /* Crosshair */
+  /* Crosshair — dynamic (driven by reticles.js) */
   #crosshair {
     position: absolute;
     top: 50%; left: 50%;
     transform: translate(-50%, -50%);
-    width: 24px; height: 24px;
+    width: 0; height: 0;
+    pointer-events: none;
+    z-index: 11;
   }
-  #crosshair::before, #crosshair::after {
+  /* Static fallback removed when .dynamic is added by JS */
+  #crosshair:not(.dynamic)::before, #crosshair:not(.dynamic)::after {
     content: '';
     position: absolute;
     background: rgba(255, 255, 255, 0.85);
   }
-  #crosshair::before {
+  #crosshair:not(.dynamic)::before {
     width: 2px; height: 24px;
-    left: 11px; top: 0;
+    left: -1px; top: -12px;
   }
-  #crosshair::after {
+  #crosshair:not(.dynamic)::after {
     width: 24px; height: 2px;
-    top: 11px; left: 0;
+    top: -1px; left: -12px;
+  }
+  /* Dynamic crosshair lines */
+  .xhair-line {
+    position: absolute;
+    background: rgba(255, 255, 255, 0.85);
+    box-shadow: 0 0 1px rgba(0, 0, 0, 0.8);
+  }
+  #xhair-top, #xhair-bottom {
+    width: 2px;
+    left: 50%;
+  }
+  #xhair-left, #xhair-right {
+    height: 2px;
+    top: 50%;
+  }
+
+  /* ADS Reticle container */
+  #ads-reticle {
+    position: absolute;
+    top: 50%; left: 50%;
+    transform: translate(-50%, -50%);
+    pointer-events: none;
+    z-index: 12;
+    opacity: 0;
+    display: none;
+  }
+
+  /* Scope overlay for high-zoom optics */
+  #scope-overlay {
+    position: fixed;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background: radial-gradient(circle, transparent 27%, rgba(0,0,0,0.97) 30%);
+    pointer-events: none;
+    z-index: 9;
+    opacity: 0;
+    display: none;
+  }
+  /* Scope blur — blurs peripheral outside scope circle */
+  #scope-blur {
+    position: fixed;
+    top: 0; left: 0; right: 0; bottom: 0;
+    backdrop-filter: blur(6px);
+    -webkit-backdrop-filter: blur(6px);
+    mask-image: radial-gradient(circle, transparent 27%, black 30%);
+    -webkit-mask-image: radial-gradient(circle, transparent 27%, black 30%);
+    pointer-events: none;
+    z-index: 8;
+    opacity: 0;
+    display: none;
+  }
+  /* Scope ring — thin dark circle at the scope edge */
+  #scope-ring {
+    position: fixed;
+    top: 50%; left: 50%;
+    transform: translate(-50%, -50%);
+    width: 56vmin; height: 56vmin;
+    border: 3px solid #111;
+    border-radius: 50%;
+    box-shadow: 0 0 10px rgba(0,0,0,0.5), inset 0 0 10px rgba(0,0,0,0.3);
+    pointer-events: none;
+    z-index: 10;
+    opacity: 0;
+    display: none;
   }
 
   /* Health bar */
@@ -86,6 +152,13 @@
     position: absolute;
     bottom: 40px; right: 40px;
     text-align: right;
+  }
+  #weapon-name {
+    font-family: 'Share Tech Mono', monospace;
+    color: rgba(255,255,255,0.5);
+    font-size: 13px;
+    letter-spacing: 2px;
+    margin-bottom: 2px;
   }
   #ammo-count {
     font-family: 'Share Tech Mono', monospace;
@@ -273,6 +346,19 @@
     letter-spacing: 2px;
     margin-top: 2px;
   }
+  #interact-prompt {
+    position: fixed;
+    bottom: 25%;
+    left: 50%;
+    transform: translateX(-50%);
+    font-family: 'Share Tech Mono', monospace;
+    color: rgba(255, 255, 255, 0.75);
+    font-size: 14px;
+    letter-spacing: 3px;
+    text-transform: uppercase;
+    pointer-events: none;
+    display: none;
+  }
   #wave-announce {
     position: fixed;
     top: 35%;
@@ -357,6 +443,49 @@
     z-index: 8;
   }
 
+  /* Damage vignette — progressive red edge overlay */
+  #damage-vignette {
+    position: fixed;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background: radial-gradient(ellipse at center, transparent 35%, rgba(231, 76, 60, 0.6) 100%);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.3s;
+    z-index: 4;
+  }
+
+  /* Death fade to black */
+  #death-fade {
+    position: fixed;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background: #000;
+    opacity: 0;
+    pointer-events: none;
+    z-index: 99;
+  }
+
+  /* Directional damage indicators */
+  #damage-indicators {
+    position: fixed;
+    top: 0; left: 0; right: 0; bottom: 0;
+    pointer-events: none;
+    z-index: 6;
+  }
+  .damage-indicator {
+    position: absolute;
+    /* Centered at screen center, rotated to point at damage source */
+    left: 50%;
+    top: 10%;
+    width: 6px;
+    height: 60px;
+    margin-left: -3px;
+    background: linear-gradient(to bottom, rgba(231, 76, 60, 0.9), transparent);
+    border-radius: 3px;
+    transform-origin: 50% calc(50vh - 10vh + 30px);
+    opacity: 0;
+    transition: opacity 0.15s;
+  }
+
 </style>
 </head>
 <body>
@@ -366,7 +495,7 @@
   <div class="subtitle">INFINITE URBAN COMBAT</div>
   <div class="prompt">[ CLICK TO BEGIN ]</div>
   <div class="controls">
-    WASD — MOVE &nbsp;&nbsp;|&nbsp;&nbsp; MOUSE — AIM &nbsp;&nbsp;|&nbsp;&nbsp; LMB — SHOOT &nbsp;&nbsp;|&nbsp;&nbsp; RMB — ADS &nbsp;&nbsp;|&nbsp;&nbsp; R — RELOAD &nbsp;&nbsp;|&nbsp;&nbsp; SHIFT — SPRINT &nbsp;&nbsp;|&nbsp;&nbsp; T — TIME OF DAY
+    WASD — MOVE &nbsp;&nbsp;|&nbsp;&nbsp; MOUSE — AIM &nbsp;&nbsp;|&nbsp;&nbsp; LMB — SHOOT &nbsp;&nbsp;|&nbsp;&nbsp; RMB — ADS &nbsp;&nbsp;|&nbsp;&nbsp; R — RELOAD &nbsp;&nbsp;|&nbsp;&nbsp; B — FIRE MODE &nbsp;&nbsp;|&nbsp;&nbsp; SHIFT — SPRINT &nbsp;&nbsp;|&nbsp;&nbsp; 1-0 — WEAPONS
   </div>
 </div>
 
@@ -380,6 +509,7 @@
 
 <div id="hud">
   <div id="crosshair"></div>
+  <div id="ads-reticle"></div>
   <div id="hit-marker"></div>
   <div id="health-bar">
     <span id="health-bar-label">HP</span>
@@ -387,6 +517,7 @@
     <span id="health-value">100</span>
   </div>
   <div id="ammo-display">
+    <div id="weapon-name"></div>
     <div id="ammo-count">30</div>
     <div id="ammo-label">ROUNDS</div>
   </div>
@@ -411,9 +542,16 @@
 </div>
 
 
+<div id="interact-prompt"></div>
 <div id="ads-vignette"></div>
 <div id="damage-flash"></div>
+<div id="damage-vignette"></div>
+<div id="damage-indicators"></div>
+<div id="death-fade"></div>
 <div id="muzzle-flash"></div>
+<div id="scope-blur"></div>
+<div id="scope-overlay"></div>
+<div id="scope-ring"></div>
 
 <script type="importmap">
 {

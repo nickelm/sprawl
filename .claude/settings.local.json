@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(node --check c:/Users/nikla/Dropbox/Dev/Sprawl/sprawl/src/nav.js)",
+      "Bash(grep -E \"\\\\.js$\")"
+    ]
+  }
+}

@@ -2,16 +2,42 @@
 // Procedural building generation — steps 1–6 of building-generation-spec.md
 // Pipeline: Footprint → Rooms (BSP) → Doors → Windows → Panel Instantiation
 import * as THREE from 'three';
-import { registerPanel, registerProp, nextSlabGroupId, panels, panelsByWall } from './destruction.js';
+import { registerPanel, registerProp, nextSlabGroupId, panels, panelsByWall,
+         registerWallMesh, registerBuildingGroup } from './destruction.js';
 import { collisionWorld } from './collision.js';
+
+// ─── Ladder placement registry ───────────────────────────────────────────────
+export const ladderDefs = [];
+
+const LADDER_NORMALS = {
+  n: { x: 0, z: -1 },
+  s: { x: 0, z:  1 },
+  e: { x: 1, z:  0 },
+  w: { x: -1, z: 0 },
+};
+
+function registerLadder(id, buildingId, ladderResult) {
+  const { cx, cz, face, baseY, topY } = ladderResult;
+  ladderDefs.push({
+    id, buildingId, face,
+    cx, cz, baseY, topY,
+    normal: LADDER_NORMALS[face],
+  });
+}
+
+export function removeLaddersForBuilding(buildingId) {
+  for (let i = ladderDefs.length - 1; i >= 0; i--) {
+    if (ladderDefs[i].buildingId === buildingId) ladderDefs.splice(i, 1);
+  }
+}
 
 // ─── §4 Panel types ──────────────────────────────────────────────────────────
 export const PANEL_TYPES = {
-  concrete:  { hp: 5, pen: 1.0, color: 0x6b6b6b },
-  brick:     { hp: 3, pen: 0.8, color: 0x8b4513 },
-  wood:      { hp: 2, pen: 0.5, color: 0xc4a86b },
-  glass:     { hp: 1, pen: 0.1, color: 0xaad4e6, opacity: 0.3 },
-  metal:     { hp: 4, pen: 0.9, color: 0x4a4a4a },
+  concrete:  { hp: 5, pen: 1.0, color: 0x6b6b6b, debrisCount: [4, 8],  mass: 2.0 },
+  brick:     { hp: 3, pen: 0.8, color: 0x8b4513, debrisCount: [5, 10], mass: 1.5 },
+  wood:      { hp: 2, pen: 0.5, color: 0xc4a86b, debrisCount: [3, 6],  mass: 0.8 },
+  glass:     { hp: 1, pen: 0.1, color: 0xaad4e6, opacity: 0.3, debrisCount: [8, 15], mass: 0.5 },
+  metal:     { hp: 4, pen: 0.9, color: 0x4a4a4a, debrisCount: [3, 5],  mass: 1.8 },
 };
 
 // ─── §5 Archetype configuration ──────────────────────────────────────────────
@@ -102,6 +128,67 @@ function getPanelMat(typeName) {
   });
   _matCache.set(typeName, mat);
   return mat;
+}
+
+// ─── Wall mesh materials (vertex-colored, shared) ────────────────────────────
+let _wallMat = null;
+function getWallMat() {
+  if (!_wallMat) _wallMat = new THREE.MeshPhongMaterial({ vertexColors: true, flatShading: true });
+  return _wallMat;
+}
+let _glassMat = null;
+function getGlassMat() {
+  if (!_glassMat) _glassMat = new THREE.MeshPhongMaterial({
+    vertexColors: true, flatShading: true, transparent: true, opacity: 0.3,
+  });
+  return _glassMat;
+}
+
+/** Convert a panel type name to RGB floats. */
+function panelColorRGB(typeName) {
+  const def = PANEL_TYPES[typeName] ?? PANEL_TYPES.concrete;
+  return [
+    ((def.color >> 16) & 0xff) / 255,
+    ((def.color >> 8) & 0xff) / 255,
+    (def.color & 0xff) / 255,
+  ];
+}
+
+/** Build a wall mesh from per-panel vertex data with vertex colors. */
+function buildWallMesh(positions, colors, panelIds, buildingId, transparent) {
+  if (positions.length === 0) return null;
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(positions), 3));
+  geo.setAttribute('color', new THREE.BufferAttribute(new Float32Array(colors), 3));
+  geo.computeVertexNormals();
+  geo.computeBoundingSphere();
+  const mesh = new THREE.Mesh(geo, transparent ? getGlassMat() : getWallMat());
+  mesh.castShadow = true;
+  mesh.receiveShadow = true;
+  mesh.userData.isWallMesh = true;
+  mesh.userData.buildingId = buildingId;
+  mesh.userData.panelIndexToId = panelIds;
+  return mesh;
+}
+
+/** Push 6 vertices of color (r,g,b) into the colors array. */
+function pushFaceColor(arr, r, g, b) {
+  for (let i = 0; i < 6; i++) arr.push(r, g, b);
+}
+
+/** Emit per-panel geometry: always 36 vertices (fixed stride for raycast lookup).
+ *  Suppressed faces become degenerate (zero-area) triangles to avoid z-fighting. */
+function emitPanelFaces(posArr, x0, y0, z0, x1, y1, z1, faceMask) {
+  const cx = (x0 + x1) / 2, cy = (y0 + y1) / 2, cz = (z0 + z1) / 2;
+  const allFaces = [FACE_PY, FACE_NY, FACE_PZ, FACE_NZ, FACE_PX, FACE_NX];
+  for (const face of allFaces) {
+    if (faceMask & face) {
+      posArr.push(...slabFaceVerts(x0, y0, z0, x1, y1, z1, face));
+    } else {
+      // Degenerate face: 6 coincident vertices → 2 zero-area triangles
+      posArr.push(cx, cy, cz, cx, cy, cz, cx, cy, cz, cx, cy, cz, cx, cy, cz, cx, cy, cz);
+    }
+  }
 }
 
 // ─── Geometry helpers ─────────────────────────────────────────────────────────
@@ -461,17 +548,50 @@ function placeDoors(floorplan, rooms, rng, isGround) {
     }
   }
 
-  // Exterior door on ground floor: pick a random south-wall segment
+  // Exterior doors on ground floor: at least 2 on different walls
   if (isGround) {
-    const southSegs = [];
-    for (let x = 0; x < width; x++)
-      if (walls.h[x]?.[0]) southSegs.push({ axis: 'h', x, z: 0 });
-    // Fallback: west wall
-    if (southSegs.length === 0)
-      for (let z = 0; z < depth; z++)
-        if (walls.v[0]?.[z]) southSegs.push({ axis: 'v', x: 0, z });
-    if (southSegs.length > 0)
-      addDoor(pickNonTerminal(southSegs));
+    // Collect candidate segments per wall face
+    const wallFaces = [
+      { segs: [], label: 'south' }, // h-wall z=0
+      { segs: [], label: 'north' }, // h-wall z=depth
+      { segs: [], label: 'west' },  // v-wall x=0
+      { segs: [], label: 'east' },  // v-wall x=width
+    ];
+    for (let x = 0; x < width; x++) {
+      if (walls.h[x]?.[0])     wallFaces[0].segs.push({ axis: 'h', x, z: 0 });
+      if (walls.h[x]?.[depth]) wallFaces[1].segs.push({ axis: 'h', x, z: depth });
+    }
+    for (let z = 0; z < depth; z++) {
+      if (walls.v[0]?.[z])     wallFaces[2].segs.push({ axis: 'v', x: 0, z });
+      if (walls.v[width]?.[z]) wallFaces[3].segs.push({ axis: 'v', x: width, z });
+    }
+
+    // Shuffle face order, then place one door on each face that has segments
+    const faceOrder = wallFaces.filter(f => f.segs.length > 0).sort(() => rng() - 0.5);
+    let extDoorCount = 0;
+    for (const face of faceOrder) {
+      const seg = pickNonTerminal(face.segs);
+      const k = dKey(seg.axis, seg.x, seg.z);
+      if (!doors.has(k)) {
+        addDoor(seg);
+        extDoorCount++;
+      }
+      if (extDoorCount >= 2) break;
+    }
+    // Fallback: if we only placed 0-1 doors, try remaining faces
+    if (extDoorCount < 2) {
+      for (const face of faceOrder) {
+        for (const seg of face.segs) {
+          const k = dKey(seg.axis, seg.x, seg.z);
+          if (!doors.has(k)) {
+            addDoor(seg);
+            extDoorCount++;
+            break;
+          }
+        }
+        if (extDoorCount >= 2) break;
+      }
+    }
   }
 }
 
@@ -623,25 +743,44 @@ function placeProps(fp, rooms, rng) {
 
 // ─── §7 Stairwell placement ───────────────────────────────────────────────────
 
+// Check if any wall bordering the given cells has a door.
+// Glass windows are OK (stairs can overlap glass), but doors are not.
+function stairCellsHaveDoor(fp, cells) {
+  const { doors } = fp;
+  for (const [cx, cz] of cells) {
+    // H-walls south (z) and north (z+1) of cell
+    if (doors.has(dKey('h', cx, cz)))     return true;
+    if (doors.has(dKey('h', cx, cz + 1))) return true;
+    // V-walls west (x) and east (x+1) of cell
+    if (doors.has(dKey('v', cx, cz)))     return true;
+    if (doors.has(dKey('v', cx + 1, cz))) return true;
+  }
+  return false;
+}
+
 // Find a 2×1 interior region that could host a stairwell.
 // Returns {x, z, axis:'x'|'z'} where axis='x' means 2 cells along x, axis='z' means 2 cells along z.
 function findStairPosition(fp, width, depth) {
   const { cells: grid } = fp;
 
   // Try axis-x first (2 cells in x direction)
-  for (let x = 0; x < width - 1; x++) {
+  // x >= 1 so entry isn't against exterior wall; x+1 <= width-2 so exit has clearance
+  for (let x = 1; x < width - 2; x++) {
     for (let z = 1; z < depth - 1; z++) {
       if (grid[x][z] >= 1 && grid[x][z] !== 3 &&
-          grid[x + 1][z] >= 1 && grid[x + 1][z] !== 3) {
+          grid[x + 1][z] >= 1 && grid[x + 1][z] !== 3 &&
+          !stairCellsHaveDoor(fp, [[x, z], [x + 1, z]])) {
         return { x, z, axis: 'x' };
       }
     }
   }
   // Try axis-z (2 cells in z direction)
+  // z >= 1 so entry isn't against exterior wall; z+1 <= depth-2 so exit has clearance
   for (let x = 1; x < width - 1; x++) {
-    for (let z = 0; z < depth - 1; z++) {
+    for (let z = 1; z < depth - 2; z++) {
       if (grid[x][z] >= 1 && grid[x][z] !== 3 &&
-          grid[x][z + 1] >= 1 && grid[x][z + 1] !== 3) {
+          grid[x][z + 1] >= 1 && grid[x][z + 1] !== 3 &&
+          !stairCellsHaveDoor(fp, [[x, z], [x, z + 1]])) {
         return { x, z, axis: 'z' };
       }
     }
@@ -690,17 +829,51 @@ function buildStairVerts(sx, sz, floorY, hpf, axis) {
       w = stepW;
       d = stepRun;
     }
-    verts.push(...slabVerts(cx, y + stepH * 0.5, cz, w, stepH, d));
+    verts.push(...solidBoxVerts(cx, y + stepH * 0.5, cz, w, stepH, d));
   }
   return verts;
 }
 
 // ─── §7.2 Ladder geometry ────────────────────────────────────────────────────
 
+// Pick a cell index along a wall face that doesn't overlap a door.
+// face 'n'|'s' → scans along x (0..width-1), checking h-walls at z=0 or z=depth.
+// face 'e'|'w' → scans along z (0..depth-1), checking v-walls at x=width or x=0.
+// Returns the best cell index; defaults to center if no door-free cell found.
+function pickLadderCell(groundFP, face, bw, bd) {
+  if (!groundFP) return (face === 'n' || face === 's') ? Math.floor(bw * 0.5) : Math.floor(bd * 0.5);
+  const { doors, width, depth } = groundFP;
+  if (face === 'n' || face === 's') {
+    const wallZ = face === 'n' ? 0 : depth;
+    const center = Math.floor(bw * 0.5);
+    // Try center first, then spiral outward
+    for (let offset = 0; offset < width; offset++) {
+      for (const dir of [0, 1, -1]) {
+        const cell = center + dir * offset;
+        if (cell < 0 || cell >= width) continue;
+        if (!doors.has(dKey('h', cell, wallZ))) return cell;
+      }
+    }
+    return center;
+  } else {
+    const wallX = face === 'e' ? width : 0;
+    const center = Math.floor(bd * 0.5);
+    for (let offset = 0; offset < depth; offset++) {
+      for (const dir of [0, 1, -1]) {
+        const cell = center + dir * offset;
+        if (cell < 0 || cell >= depth) continue;
+        if (!doors.has(dKey('v', wallX, cell))) return cell;
+      }
+    }
+    return center;
+  }
+}
+
 // Build ladder geometry attached to a wall face.
-// wx, wz = world-space corner of the building face; x, z = cell position on that face
+// wx, wz = world-space corner of the building; bw, bd = footprint dimensions
 // totalHeight = height in metres; face = 'n'|'s'|'e'|'w' (which building wall)
-function buildLadderMesh(wx, wy, wz, bw, bd, face, totalHeight) {
+// cellIdx = which cell along the wall to place the ladder at
+function buildLadderMesh(wx, wy, wz, bw, bd, face, totalHeight, cellIdx) {
   const verts = [];
   const RUNG_SPACING = 0.3;
   const RUNG_W = 0.4;
@@ -709,11 +882,16 @@ function buildLadderMesh(wx, wy, wz, bw, bd, face, totalHeight) {
   const RAIL_W = 0.04;
   const OFFSET = 0.08; // how far from wall face
 
-  let cx, cz, railDim; // centre of ladder
-  if (face === 'n') { cx = wx + bw * 0.5; cz = wz - OFFSET; railDim = 'x'; }
-  else if (face === 's') { cx = wx + bw * 0.5; cz = wz + bd + OFFSET; railDim = 'x'; }
-  else if (face === 'e') { cx = wx + bw + OFFSET; cz = wz + bd * 0.5; railDim = 'z'; }
-  else { cx = wx - OFFSET; cz = wz + bd * 0.5; railDim = 'z'; } // west
+  let cx, cz, railDim; // centre of ladder (snapped to cell centre)
+  if (face === 'n' || face === 's') {
+    cx = wx + (cellIdx ?? Math.floor(bw * 0.5)) + 0.5;
+    cz = face === 'n' ? wz - OFFSET : wz + bd + OFFSET;
+    railDim = 'x';
+  } else {
+    cx = face === 'e' ? wx + bw + OFFSET : wx - OFFSET;
+    cz = wz + (cellIdx ?? Math.floor(bd * 0.5)) + 0.5;
+    railDim = 'z';
+  }
 
   const rungs = Math.floor(totalHeight / RUNG_SPACING);
   for (let i = 0; i <= rungs; i++) {
@@ -735,13 +913,14 @@ function buildLadderMesh(wx, wy, wz, bw, bd, face, totalHeight) {
     verts.push(...slabVerts(cx, wy + railH * 0.5, cz + halfSpan, RUNG_D, railH, RAIL_W));
   }
 
-  return buildMesh(verts, getPanelMat('metal'));
+  const mesh = buildMesh(verts, getPanelMat('metal'));
+  return { mesh, cx, cz, face, baseY: wy, topY: wy + totalHeight };
 }
 
 // ─── §9 Archetype-specific features ─────────────────────────────────────────
 
 // Warehouse catwalk: elevated walkway at mid-height with metal columns + ladder.
-function addWarehouseCatwalk(group, buildingDef, wx, wy, wz) {
+function addWarehouseCatwalk(group, buildingDef, wx, wy, wz, buildingId) {
   const { footprintW: bw, footprintD: bd, heightPerFloor: hpf } = buildingDef;
   const catY  = wy + hpf * 0.5; // 3m for 6m warehouse
   const slab  = 0.1;
@@ -775,8 +954,15 @@ function addWarehouseCatwalk(group, buildingDef, wx, wy, wz) {
   }
 
   // Ladder from ground to catwalk on north face
-  const ladderMesh = buildLadderMesh(wx, wy, wz, bw, bd, 'n', hpf * 0.5);
-  if (ladderMesh) group.add(ladderMesh);
+  const groundFP = buildingDef.floors[0];
+  const cellIdx = pickLadderCell(groundFP, 'n', bw, bd);
+  const ladderResult = buildLadderMesh(wx, wy, wz, bw, bd, 'n', hpf * 0.5, cellIdx);
+  if (ladderResult.mesh) {
+    group.add(ladderResult.mesh);
+    const ladId = _panelId++;
+    registerProp({ id: ladId, type: 'ladder', hp: 3, maxHp: 3, buildingId });
+    registerLadder(ladId, buildingId, ladderResult);
+  }
 }
 
 // ─── §3 Panel instantiation ───────────────────────────────────────────────────
@@ -1008,18 +1194,23 @@ export function instantiateBuilding(buildingDef, wx, wy, wz) {
     // Corner extensions: H-walls extend 0.1m at junctions with V-walls.
     const cornerExt = computeCornerExtensions(walls, width, depth);
 
+    // Per-panel wall geometry accumulators (vertex-colored, one mesh per floor).
+    const wallPos = [], wallCol = [], wallIds = [];     // opaque
+    const glassPos = [], glassCol = [], glassIds = [];  // transparent
+    // Deferred panel data — meshRef set after mesh creation.
+    const deferredPanels = []; // { panelId, isGlass }
+
     // ── Horizontal wall panels (h[x][z]) ──────────────────────────────────
-    // walls.h[x][z] separates cell (x, z-1) [below] from cell (x, z) [above].
-    // +Z face looks toward "above" cell; -Z face looks toward "below" cell.
-    // Thickness in Z: slab at [wz+z, wz+z+0.1]. 2D greedy merge across x × height.
+    // Per-panel fixed-stride geometry: 12 triangles = 36 vertices per panel.
+    // Buffer face order: +Y(6), -Y(6), +Z(6), -Z(6), +X(6), -X(6).
     for (let z = 0; z <= depth; z++) {
       const extMat = buildingDef.style.extWall;
       const intMat = buildingDef.style.intWall;
       const pz0 = wz + z, pz1 = wz + z + slabThick;
       const isStorefrontRow = archetype === 'strip_mall' && z === 0;
 
-      // Collect per-x segment data (shared across all height rows).
-      const xData = []; // sparse: xData[x] = { below, above, hasLeftPerp, hasRightPerp, isDoor, isWin }
+      // Collect per-x segment data.
+      const xData = [];
       for (let x = 0; x < width; x++) {
         if (!walls.h[x][z]) continue;
         const below = z > 0     ? grid[x][z - 1] : 0;
@@ -1034,7 +1225,7 @@ export function instantiateBuilding(buildingDef, wx, wy, wz) {
         };
       }
 
-      // Glass suppression at/adjacent to corners (independent of height row).
+      // Glass suppression at/adjacent to corners.
       const noCorner = new Uint8Array(width);
       for (let x = 0; x < width; x++) {
         if (!xData[x]) continue;
@@ -1062,63 +1253,72 @@ export function instantiateBuilding(buildingDef, wx, wy, wz) {
         }
       }
 
-      // 2D greedy merge and emit each face direction.
-      for (const [grid2D, faceBit] of [[gridPZ, FACE_PZ], [gridMZ, FACE_NZ]]) {
-        for (const [rx, ry, rw, rh, matType] of greedyRectMerge(grid2D, width, wallRows)) {
-          let leftX  = wx + rx;
-          let rightX = wx + rx + rw;
-          const y0 = wallBaseY + panelH * ry;
-          const y1 = wallBaseY + panelH * (ry + rh);
-          // Corner extension: extend +X end where V-wall meets H-wall
-          const rightExt = cornerExt.get(`${rx + rw - 1},${z}`);
-          if (rightExt?.extPosX) rightX += slabThick;
-          getArr(matType).push(...slabFaceVerts(leftX, y0, pz0, rightX, y1, pz1, faceBit));
-        }
-      }
-
-      // Register individual panels + emit edge faces.
+      // Per-panel geometry emission (replaces greedy merge).
       for (let x = 0; x < width; x++) {
         if (!xData[x]) continue;
         for (let p = 0; p < wallRows; p++) {
-          if (!gridPZ[x][p] && !gridMZ[x][p]) continue;
+          const matPZ = gridPZ[x][p], matMZ = gridMZ[x][p];
+          if (!matPZ && !matMZ) continue;
           if (panelCount >= MAX_PANELS) break;
-          const rMat = gridPZ[x][p] || gridMZ[x][p];
-          const def  = PANEL_TYPES[rMat] ?? PANEL_TYPES.concrete;
-          const arr  = getArr(rMat);
-          const px0  = wx + x;
-          const px1  = wx + x + 1;
-          const py0  = wallBaseY + panelH * p;
-          const py1  = wallBaseY + panelH * (p + 1);
-          const hasLeft  = !!(gridPZ[x - 1]?.[p] || gridMZ[x - 1]?.[p]);
-          const hasRight = !!(gridPZ[x + 1]?.[p] || gridMZ[x + 1]?.[p]);
-          // Suppress end caps at corners where V-wall covers them.
-          let edgeMask = 0;
-          if (!hasLeft  && !xData[x].hasLeftPerp)  edgeMask |= FACE_NX;
-          if (!hasRight && !xData[x].hasRightPerp) edgeMask |= FACE_PX;
-          const vertexStart = arr.length / 3;
-          const edgeVerts = edgeMask ? slabFaceVerts(px0, py0, pz0, px1, py1, pz1, edgeMask) : [];
-          arr.push(...edgeVerts);
+
+          const rMat = matPZ || matMZ;
+          const isGlassPanel = rMat === 'glass';
+          const posArr = isGlassPanel ? glassPos : wallPos;
+          const colArr = isGlassPanel ? glassCol : wallCol;
+          const idArr  = isGlassPanel ? glassIds : wallIds;
+
+          // Panel bounds
+          let px0 = wx + x, px1 = wx + x + 1;
+          const py0 = wallBaseY + panelH * p;
+          const py1 = wallBaseY + panelH * (p + 1);
+
+          // Corner extension: extend +X when V-wall meets at right edge
+          const ext = cornerExt.get(`${x},${z}`);
+          if (ext?.extPosX) px1 += slabThick;
+
+          // Emit 36 verts (fixed stride) — suppress endcap faces at wall junctions
+          const vertexStart = posArr.length / 3;
+          let hMask = FACE_PY | FACE_NY | FACE_PZ | FACE_NZ | FACE_PX | FACE_NX;
+          if (xData[x - 1] || xData[x].hasLeftPerp)  hMask &= ~FACE_NX;
+          if (xData[x + 1] || xData[x].hasRightPerp) hMask &= ~FACE_PX;
+          emitPanelFaces(posArr, px0, py0, pz0, px1, py1, pz1, hMask);
+
+          // Per-face vertex colors: edge, edge, front(+Z), back(-Z), edge, edge
+          const edgeRGB  = panelColorRGB(rMat);
+          const frontRGB = panelColorRGB(matPZ || rMat);
+          const backRGB  = panelColorRGB(matMZ || rMat);
+          pushFaceColor(colArr, ...edgeRGB);   // +Y
+          pushFaceColor(colArr, ...edgeRGB);   // -Y
+          pushFaceColor(colArr, ...frontRGB);  // +Z (front)
+          pushFaceColor(colArr, ...backRGB);   // -Z (back)
+          pushFaceColor(colArr, ...edgeRGB);   // +X
+          pushFaceColor(colArr, ...edgeRGB);   // -X
+
+          const panelId = _panelId++;
+          const def = PANEL_TYPES[rMat] ?? PANEL_TYPES.concrete;
+          idArr.push(panelId);
+          const suppressedFaces = ~hMask & (FACE_PX | FACE_NX);
           registerPanel({
-            id: _panelId++, type: rMat, hp: def.hp, maxHp: def.hp,
+            id: panelId, type: rMat, hp: def.hp, maxHp: def.hp,
             gridX: x, gridY: f * 10 + p, wallId: z * 10000 + x, buildingId,
-            vertexStart, vertexCount: edgeVerts.length / 3, penetrationCost: def.pen, isSupported: true,
+            vertexStart, vertexCount: 36, penetrationCost: def.pen, isSupported: true,
+            meshRef: null, frontMat: matPZ || rMat, backMat: matMZ || rMat, isVWall: false,
+            bounds: [px0, py0, pz0, px1, py1, pz1], suppressedFaces,
           });
+          deferredPanels.push({ panelId, isGlass: isGlassPanel });
           panelCount++;
         }
       }
     }
 
     // ── Vertical wall panels (v[x][z]) ────────────────────────────────────
-    // walls.v[x][z] separates cell (x-1, z) [left] from cell (x, z) [right].
-    // +X face looks toward "right" cell; -X face looks toward "left" cell.
-    // Thickness in X: slab at [wx+x, wx+x+0.1]. 2D greedy merge across z × height.
+    // Per-panel fixed-stride geometry. Face order: +Y(6), -Y(6), +X(6), -X(6), +Z(6), -Z(6).
     for (let x = 0; x <= width; x++) {
       const extMat = buildingDef.style.extWall;
       const intMat = buildingDef.style.intWall;
       const vx0 = wx + x, vx1 = wx + x + slabThick;
 
-      // Collect per-z segment data (shared across all height rows).
-      const zData = []; // sparse: zData[z] = { left, right, hasBotPerp, hasTopPerp, isDoor, isWin }
+      const zData = [];
       for (let z = 0; z < depth; z++) {
         if (!walls.v[x][z]) continue;
         const left  = x > 0     ? grid[x - 1][z] : 0;
@@ -1133,7 +1333,6 @@ export function instantiateBuilding(buildingDef, wx, wy, wz) {
         };
       }
 
-      // Glass suppression at/adjacent to corners.
       const noCorner = new Uint8Array(depth);
       for (let z = 0; z < depth; z++) {
         if (!zData[z]) continue;
@@ -1143,7 +1342,6 @@ export function instantiateBuilding(buildingDef, wx, wy, wz) {
         noCorner[z] = (!atCorner && !prevCorner && !nextCorner) ? 1 : 0;
       }
 
-      // Build 2D material grids: gridPX[z][p] and gridMX[z][p].
       const gridPX = Array.from({ length: depth }, () => new Array(wallRows).fill(null));
       const gridMX = Array.from({ length: depth }, () => new Array(wallRows).fill(null));
       for (let z = 0; z < depth; z++) {
@@ -1159,67 +1357,108 @@ export function instantiateBuilding(buildingDef, wx, wy, wz) {
         }
       }
 
-      // 2D greedy merge and emit each face direction.
-      for (const [grid2D, faceBit] of [[gridPX, FACE_PX], [gridMX, FACE_NX]]) {
-        for (const [rz, ry, rd, rh, matType] of greedyRectMerge(grid2D, depth, wallRows)) {
-          const botZ = wz + rz;
-          let topZ = wz + rz + rd;
-          const y0 = wallBaseY + panelH * ry;
-          const y1 = wallBaseY + panelH * (ry + rh);
-          // Corner extension: extend +Z end where H-wall meets V-wall
-          if (zData[rz + rd - 1]?.hasTopPerp) topZ += slabThick;
-          getArr(matType).push(...slabFaceVerts(vx0, y0, botZ, vx1, y1, topZ, faceBit));
-        }
-      }
-
-      // Register individual panels + emit edge faces.
+      // Per-panel geometry emission.
       for (let z = 0; z < depth; z++) {
         if (!zData[z]) continue;
         for (let p = 0; p < wallRows; p++) {
-          if (!gridPX[z][p] && !gridMX[z][p]) continue;
+          const matPX = gridPX[z][p], matMX = gridMX[z][p];
+          if (!matPX && !matMX) continue;
           if (panelCount >= MAX_PANELS) break;
-          const rMat = gridPX[z][p] || gridMX[z][p];
-          const def  = PANEL_TYPES[rMat] ?? PANEL_TYPES.concrete;
-          const arr  = getArr(rMat);
-          const sz0  = wz + z;
-          const sz1  = wz + z + 1;
-          const py0  = wallBaseY + panelH * p;
-          const py1  = wallBaseY + panelH * (p + 1);
-          const hasFront = !!(gridPX[z - 1]?.[p] || gridMX[z - 1]?.[p]);
-          const hasBack  = !!(gridPX[z + 1]?.[p] || gridMX[z + 1]?.[p]);
-          // Suppress end faces at corners where H-wall extensions cover them.
-          let edgeMask = 0;
-          if (!hasFront && !zData[z].hasBotPerp) edgeMask |= FACE_NZ;
-          if (!hasBack  && !zData[z].hasTopPerp) edgeMask |= FACE_PZ;
-          const vertexStart = arr.length / 3;
-          const edgeVerts = edgeMask ? slabFaceVerts(vx0, py0, sz0, vx1, py1, sz1, edgeMask) : [];
-          arr.push(...edgeVerts);
+
+          const rMat = matPX || matMX;
+          const isGlassPanel = rMat === 'glass';
+          const posArr = isGlassPanel ? glassPos : wallPos;
+          const colArr = isGlassPanel ? glassCol : wallCol;
+          const idArr  = isGlassPanel ? glassIds : wallIds;
+
+          // Panel bounds
+          let sz0 = wz + z, sz1 = wz + z + 1;
+          const py0 = wallBaseY + panelH * p;
+          const py1 = wallBaseY + panelH * (p + 1);
+
+          // Corner extension: extend +Z when H-wall meets at top edge
+          if (zData[z]?.hasTopPerp) sz1 += slabThick;
+
+          // Emit 36 verts (fixed stride) — suppress endcap faces at wall junctions
+          const vertexStart = posArr.length / 3;
+          let vMask = FACE_PY | FACE_NY | FACE_PZ | FACE_NZ | FACE_PX | FACE_NX;
+          if (zData[z - 1] || zData[z].hasBotPerp) vMask &= ~FACE_NZ;
+          if (zData[z + 1] || zData[z].hasTopPerp) vMask &= ~FACE_PZ;
+          emitPanelFaces(posArr, vx0, py0, sz0, vx1, py1, sz1, vMask);
+
+          // Per-face vertex colors.
+          // slabFaceVerts order: +Y, -Y, +Z, -Z, +X, -X
+          // For V-walls: +X is front (toward right cell), -X is back (toward left cell)
+          const edgeRGB  = panelColorRGB(rMat);
+          const frontRGB = panelColorRGB(matPX || rMat); // +X face
+          const backRGB  = panelColorRGB(matMX || rMat); // -X face
+          pushFaceColor(colArr, ...edgeRGB);   // +Y
+          pushFaceColor(colArr, ...edgeRGB);   // -Y
+          pushFaceColor(colArr, ...edgeRGB);   // +Z (end edge)
+          pushFaceColor(colArr, ...edgeRGB);   // -Z (end edge)
+          pushFaceColor(colArr, ...frontRGB);  // +X (front)
+          pushFaceColor(colArr, ...backRGB);   // -X (back)
+
+          const panelId = _panelId++;
+          const def = PANEL_TYPES[rMat] ?? PANEL_TYPES.concrete;
+          idArr.push(panelId);
+          const suppressedFaces = ~vMask & (FACE_PZ | FACE_NZ);
           registerPanel({
-            id: _panelId++, type: rMat, hp: def.hp, maxHp: def.hp,
+            id: panelId, type: rMat, hp: def.hp, maxHp: def.hp,
             gridX: x, gridY: f * 10 + p, wallId: x * 10000 + z, buildingId,
-            vertexStart, vertexCount: edgeVerts.length / 3, penetrationCost: def.pen, isSupported: true,
+            vertexStart, vertexCount: 36, penetrationCost: def.pen, isSupported: true,
+            meshRef: null, frontMat: matPX || rMat, backMat: matMX || rMat, isVWall: true,
+            bounds: [vx0, py0, sz0, vx1, py1, sz1], suppressedFaces,
           });
+          deferredPanels.push({ panelId, isGlass: isGlassPanel });
           panelCount++;
         }
       }
     }
 
-    // ── Props ─────────────────────────────────────────────────────────────
-    for (const { x, z, type } of fp.props ?? []) {
-      const def = PROP_DEFS[type];
-      if (!def) continue;
-      const pcx = wx + x + def.w * 0.5 + 0.05;
-      const pcy = floorY + slabThick + def.h * 0.5; // floor surface + half height
-      const pcz = wz + z + def.d * 0.5 + 0.05;
-      getArr(def.mat).push(...solidBoxVerts(pcx, pcy, pcz, def.w, def.h, def.d));
-      registerProp({ id: _panelId++, type, hp: def.hp, maxHp: def.hp, buildingId });
-    }
+    // ── Props (disabled — causes AI pathing issues) ───────────────────────
+    // for (const { x, z, type } of fp.props ?? []) {
+    //   const def = PROP_DEFS[type];
+    //   if (!def) continue;
+    //   const pcx = wx + x + def.w * 0.5 + 0.05;
+    //   const pcy = floorY + slabThick + def.h * 0.5;
+    //   const pcz = wz + z + def.d * 0.5 + 0.05;
+    //   getArr(def.mat).push(...solidBoxVerts(pcx, pcy, pcz, def.w, def.h, def.d));
+    //   registerProp({ id: _panelId++, type, hp: def.hp, maxHp: def.hp, buildingId });
+    // }
 
-    // ── Build merged meshes for this floor ────────────────────────────────
+    // ── Build slab/prop meshes for this floor (non-wall geometry) ─────────
     for (const [typeName, arr] of Object.entries(verts)) {
       if (arr.length === 0) continue;
       const mesh = buildMesh(arr, getPanelMat(typeName));
       if (mesh) group.add(mesh);
+    }
+
+    // ── Build per-panel wall meshes for this floor ────────────────────────
+    const opaqueWallMesh = buildWallMesh(wallPos, wallCol, wallIds, buildingId, false);
+    if (opaqueWallMesh) {
+      group.add(opaqueWallMesh);
+      const wallKey = `f${f}:opaque`;
+      registerWallMesh(buildingId, wallKey, opaqueWallMesh);
+      // Set meshRef on all opaque panels for this floor
+      for (const dp of deferredPanels) {
+        if (!dp.isGlass) {
+          const p = panels.get(dp.panelId);
+          if (p) p.meshRef = opaqueWallMesh;
+        }
+      }
+    }
+    const glassWallMesh = buildWallMesh(glassPos, glassCol, glassIds, buildingId, true);
+    if (glassWallMesh) {
+      group.add(glassWallMesh);
+      const wallKey = `f${f}:glass`;
+      registerWallMesh(buildingId, wallKey, glassWallMesh);
+      for (const dp of deferredPanels) {
+        if (dp.isGlass) {
+          const p = panels.get(dp.panelId);
+          if (p) p.meshRef = glassWallMesh;
+        }
+      }
     }
 
     // ── Roof mesh (top floor ceiling only, separate for debug toggling) ────
@@ -1251,27 +1490,37 @@ export function instantiateBuilding(buildingDef, wx, wy, wz) {
     }
   }
 
-  // ── Roof-access ladder (single-floor or no-stairwell buildings) ───────
-  const needsLadder = (archetype === 'warehouse' || archetype === 'strip_mall') ||
-                      (floors.length > 1 && (buildingDef.stairwells ?? []).length === 0);
-  if (needsLadder) {
+  // ── Roof-access ladder (all buildings) ──────────────────────────────
+  {
     const totalHeight = floors.length * heightPerFloor;
-    const ladder = buildLadderMesh(wx, wy, wz, buildingDef.footprintW, buildingDef.footprintD, 'n', totalHeight);
-    if (ladder) group.add(ladder);
-    registerProp({ id: _panelId++, type: 'ladder', hp: 3, maxHp: 3, buildingId });
+    const groundFP = floors[0];
+    const cellIdx = pickLadderCell(groundFP, 'n', buildingDef.footprintW, buildingDef.footprintD);
+    const ladderResult = buildLadderMesh(wx, wy, wz, buildingDef.footprintW, buildingDef.footprintD, 'n', totalHeight, cellIdx);
+    if (ladderResult.mesh) {
+      group.add(ladderResult.mesh);
+      const ladId = _panelId++;
+      registerProp({ id: ladId, type: 'ladder', hp: 3, maxHp: 3, buildingId });
+      registerLadder(ladId, buildingId, ladderResult);
+    }
   }
 
   // ── Apartment fire-escape ladder (east wall) ──────────────────────────
   if (archetype === 'apartment') {
     const totalHeight = floors.length * heightPerFloor;
-    const ladder = buildLadderMesh(wx, wy, wz, buildingDef.footprintW, buildingDef.footprintD, 'e', totalHeight);
-    if (ladder) group.add(ladder);
-    registerProp({ id: _panelId++, type: 'ladder', hp: 3, maxHp: 3, buildingId });
+    const groundFP = floors[0];
+    const cellIdx = pickLadderCell(groundFP, 'e', buildingDef.footprintW, buildingDef.footprintD);
+    const ladderResult = buildLadderMesh(wx, wy, wz, buildingDef.footprintW, buildingDef.footprintD, 'e', totalHeight, cellIdx);
+    if (ladderResult.mesh) {
+      group.add(ladderResult.mesh);
+      const ladId = _panelId++;
+      registerProp({ id: ladId, type: 'ladder', hp: 3, maxHp: 3, buildingId });
+      registerLadder(ladId, buildingId, ladderResult);
+    }
   }
 
   // ── Warehouse catwalk ─────────────────────────────────────────────────
   if (archetype === 'warehouse') {
-    addWarehouseCatwalk(group, buildingDef, wx, wy, wz);
+    addWarehouseCatwalk(group, buildingDef, wx, wy, wz, buildingId);
   }
 
   // ── Generate collision data and register with CollisionWorld ──────────────
@@ -1285,6 +1534,7 @@ export function instantiateBuilding(buildingDef, wx, wy, wz) {
   });
 
   group.userData.buildingId = buildingId;
+  registerBuildingGroup(buildingId, group);
   return group;
 }
 
@@ -1368,16 +1618,16 @@ function generateCollisionData(buildingDef, buildingId) {
       }
     }
 
-    // ── Prop colliders ────────────────────────────────────────────────────
-    for (const { x, z, type } of fp.props ?? []) {
-      const def = PROP_DEFS[type];
-      if (!def) continue;
-      propColliders.push({
-        minX: x + 0.05, maxX: x + def.w + 0.05,
-        minY: f * heightPerFloor + slabThick, maxY: f * heightPerFloor + slabThick + def.h,
-        minZ: z + 0.05, maxZ: z + def.d + 0.05,
-      });
-    }
+    // ── Prop colliders (disabled — props disabled for pathing) ─────────────
+    // for (const { x, z, type } of fp.props ?? []) {
+    //   const def = PROP_DEFS[type];
+    //   if (!def) continue;
+    //   propColliders.push({
+    //     minX: x + 0.05, maxX: x + def.w + 0.05,
+    //     minY: f * heightPerFloor + slabThick, maxY: f * heightPerFloor + slabThick + def.h,
+    //     minZ: z + 0.05, maxZ: z + def.d + 0.05,
+    //   });
+    // }
   }
 
   // ── Stair colliders ───────────────────────────────────────────────────────
@@ -1483,53 +1733,8 @@ function emitVWallCollider(out, x, z0, z1, f, wallBaseY, clearH, wallRows, panel
   }
 }
 
-// ─── Destruction re-splitting ─────────────────────────────────────────────────
-// When a panel within a merged slab is destroyed, re-run greedy merge on remaining
-// cells and replace the old mesh(es) with new geometry.
-
-export function rebuildMergedSlab(buildingId, wallId, group) {
-  const key = `${buildingId},${wallId}`;
-  const panelIds = panelsByWall.get(key);
-  if (!panelIds || panelIds.size === 0) return;
-
-  // Collect surviving panels (hp > 0) and determine wall orientation + bounds.
-  const surviving = [];
-  let isHWall = false;
-  for (const pid of panelIds) {
-    const p = panels.get(pid);
-    if (!p || p.hp <= 0) continue;
-    surviving.push(p);
-    // wallId format: h-walls = z * 10000 + x, v-walls = x * 10000 + z
-    // Determine orientation from gridX vs wallId relationship
-  }
-  if (surviving.length === 0) return;
-
-  // Determine grid dimensions from surviving panels.
-  // Build a 2D type grid from surviving panel positions.
-  let minPos = Infinity, maxPos = -Infinity, minRow = Infinity, maxRow = -Infinity;
-  for (const p of surviving) {
-    const pos = p.gridX;
-    const row = p.gridY % 10; // height row within floor
-    if (pos < minPos) minPos = pos;
-    if (pos > maxPos) maxPos = pos;
-    if (row < minRow) minRow = row;
-    if (row > maxRow) maxRow = row;
-  }
-  const gw = maxPos - minPos + 1;
-  const gh = maxRow - minRow + 1;
-  const grid = Array.from({ length: gw }, () => new Array(gh).fill(null));
-  for (const p of surviving) {
-    grid[p.gridX - minPos][(p.gridY % 10) - minRow] = p.type;
-  }
-
-  // Re-merge and rebuild geometry.
-  const rects = greedyRectMerge(grid, gw, gh);
-  // Note: actual mesh replacement requires knowing the wall's world-space coordinates
-  // and the mesh reference, which are stored during instantiation. The full mesh
-  // rebuild will be connected when the weapon/damage system is implemented.
-  // For now, this provides the re-merge infrastructure.
-  return rects;
-}
+// rebuildMergedSlab is no longer needed — per-panel geometry uses vertex
+// zeroing for destruction instead of re-merging.
 
 // ─── Entry points ─────────────────────────────────────────────────────────────
 

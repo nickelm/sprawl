@@ -174,6 +174,49 @@ class CollisionWorld {
     return results;
   }
 
+  /** Add a foundation collider (building-local AABB) and extend the building's
+   *  world AABB so broad-phase queries include the foundation/step zone. */
+  addFoundation(id, localAABB) {
+    const data = this._buildings.get(id);
+    if (!data) return;
+    data.propColliders.push(localAABB);
+
+    // Extend worldAABB to cover this collider
+    const wx = data.worldX, wy = data.worldY, wz = data.worldZ;
+    const wMinX = localAABB.minX + wx;
+    const wMaxX = localAABB.maxX + wx;
+    const wMinY = localAABB.minY + wy;
+    const wMinZ = localAABB.minZ + wz;
+    const wMaxZ = localAABB.maxZ + wz;
+    const bb = data.worldAABB;
+    const oldMinX = bb.minX, oldMaxX = bb.maxX;
+    const oldMinZ = bb.minZ, oldMaxZ = bb.maxZ;
+    let changed = false;
+    if (wMinX < bb.minX) { bb.minX = wMinX; changed = true; }
+    if (wMaxX > bb.maxX) { bb.maxX = wMaxX; changed = true; }
+    if (wMinY < bb.minY) { bb.minY = wMinY; }
+    if (wMinZ < bb.minZ) { bb.minZ = wMinZ; changed = true; }
+    if (wMaxZ > bb.maxZ) { bb.maxZ = wMaxZ; changed = true; }
+
+    // Update spatial hash if XZ bounds expanded
+    if (changed) {
+      const cs = this._cellSize;
+      const nx0 = Math.floor(bb.minX / cs), nx1 = Math.floor(bb.maxX / cs);
+      const nz0 = Math.floor(bb.minZ / cs), nz1 = Math.floor(bb.maxZ / cs);
+      const ox0 = Math.floor(oldMinX / cs), ox1 = Math.floor(oldMaxX / cs);
+      const oz0 = Math.floor(oldMinZ / cs), oz1 = Math.floor(oldMaxZ / cs);
+      for (let x = nx0; x <= nx1; x++) {
+        for (let z = nz0; z <= nz1; z++) {
+          if (x >= ox0 && x <= ox1 && z >= oz0 && z <= oz1) continue; // already in hash
+          const key = x + ',' + z;
+          let set = this._hash.get(key);
+          if (!set) { set = new Set(); this._hash.set(key, set); }
+          set.add(id);
+        }
+      }
+    }
+  }
+
   /** Update wall bitmask when a panel is destroyed. */
   updateWallMask(buildingId, wallKey, panelGridX, panelGridY, value) {
     const wc = this._wallMap.get(buildingId + ',' + wallKey);

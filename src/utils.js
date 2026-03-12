@@ -7,8 +7,14 @@ export function seededRNG(seed) {
   };
 }
 
+export let worldSeed = 42317;
+
+export function randomizeWorldSeed() {
+  worldSeed = Math.floor(Math.random() * 0x7FFFFFFF);
+}
+
 export function chunkSeed(cx, cz) {
-  return ((cx * 73856093) ^ (cz * 19349663)) & 0x7FFFFFFF;
+  return ((cx * 73856093) ^ (cz * 19349663) ^ worldSeed) & 0x7FFFFFFF;
 }
 
 export function chunkKey(cx, cz) { return `${cx},${cz}`; }
