@@ -89,11 +89,13 @@ function buildWeaponModel(defKey) {
     color: 0xffee88,
     transparent: true,
     opacity: 0,
+    depthWrite: false,
     side: THREE.DoubleSide,
   });
   const flashGeo = new THREE.PlaneGeometry(0.15, 0.15);
   muzzleFlash3D = new THREE.Mesh(flashGeo, flashMat);
   muzzleFlash3D.position.set(...def.muzzleOffset);
+  muzzleFlash3D.visible = false;
   muzzleFlash3D.userData.isHot = true;  // glow in thermal view
   weaponGroup.add(muzzleFlash3D);
 
@@ -501,6 +503,7 @@ export function triggerRecoil(pitchDeg, yawDeg, suppressed = false) {
   if (!suppressed && Math.random() > 0.2) {
     muzzleFlashTimer = 0.04;
     if (muzzleFlash3D) {
+      muzzleFlash3D.visible = true;
       const s = 0.3 + Math.random() * 0.2;
       muzzleFlash3D.scale.set(s / 0.15, s / 0.15, 1);
       muzzleFlash3D.material.opacity = 1;
@@ -624,7 +627,7 @@ export function updateWeaponView(dt) {
   if (muzzleFlashTimer > 0) {
     muzzleFlashTimer -= dt;
     if (muzzleFlashTimer <= 0) {
-      if (muzzleFlash3D) muzzleFlash3D.material.opacity = 0;
+      if (muzzleFlash3D) { muzzleFlash3D.material.opacity = 0; muzzleFlash3D.visible = false; }
       if (muzzleLight) muzzleLight.intensity = 0;
     }
   }

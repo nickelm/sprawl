@@ -17,6 +17,7 @@ import { updateDebris } from './debris.js';
 import { updateCollapseQueue } from './destruction.js';
 import { openWorkbench, closeWorkbench, isWorkbenchOpen } from './workbench.js';
 import { initPostFX, updatePostFXBlend, postFXActive, renderWithPostFX, resizePostFX, setPostFXMode, getPostFXInputTarget, applyPostFX } from './postfx.js';
+import { initInkPass, resizeInkPass, inkEnabled, setInkEnabled, getInkInputTarget, renderInkPass } from './inkpass.js';
 
 
 // ─── GAME LOOP ─────────────────────────────────────────────
@@ -60,7 +61,20 @@ function gameLoop(time) {
 
   updatePostFXBlend(dt);
 
-  if (postFXActive()) {
+  if (inkEnabled()) {
+    // Scene → ink color target (with depth)
+    renderer.setRenderTarget(getInkInputTarget());
+    renderer.render(scene, camera);
+
+    if (postFXActive()) {
+      // Ink composite → postFX input target, then postFX → screen
+      renderInkPass(camera, getPostFXInputTarget());
+      applyPostFX(scene, camera);
+    } else {
+      // Ink composite → screen
+      renderInkPass(camera, null);
+    }
+  } else if (postFXActive()) {
     renderer.setRenderTarget(getPostFXInputTarget());
     renderer.render(scene, camera);
     applyPostFX(scene, camera);
@@ -144,6 +158,7 @@ function startGame() {
 
 // ─── INIT ──────────────────────────────────────────────────
 initRenderer();
+initInkPass(renderer);
 initPostFX(renderer, scene);
 initPlayer();
 initWeaponView();
@@ -152,6 +167,7 @@ initAudio();
 
 window.addEventListener('resize', () => {
   handleResize();
+  resizeInkPass(window.innerWidth, window.innerHeight);
   resizePostFX(window.innerWidth, window.innerHeight);
 });
 document.getElementById('start-screen').addEventListener('click', startGame);
@@ -206,6 +222,9 @@ document.addEventListener('keydown', e => {
   if (e.code === 'KeyT') {
     dayCycleIdx = (dayCycleIdx + 1) % DAY_CYCLE.length;
     setDayTime(DAY_CYCLE[dayCycleIdx]);
+  }
+  if (e.code === 'KeyO') {
+    setInkEnabled(!inkEnabled());
   }
 
 
