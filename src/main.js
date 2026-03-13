@@ -16,7 +16,8 @@ import { reseedTerrain } from './terrain.js';
 import { updateDebris } from './debris.js';
 import { updateCollapseQueue } from './destruction.js';
 import { openWorkbench, closeWorkbench, isWorkbenchOpen } from './workbench.js';
-import { initPostFX, updatePostFXBlend, postFXActive, renderWithPostFX, resizePostFX, setPostFXMode } from './postfx.js';
+import { initPostFX, updatePostFXBlend, postFXActive, renderWithPostFX, resizePostFX, setPostFXMode, getPostFXInputTarget, applyPostFX } from './postfx.js';
+
 
 // ─── GAME LOOP ─────────────────────────────────────────────
 let lastTime = 0;
@@ -60,8 +61,11 @@ function gameLoop(time) {
   updatePostFXBlend(dt);
 
   if (postFXActive()) {
-    renderWithPostFX(scene, camera);
+    renderer.setRenderTarget(getPostFXInputTarget());
+    renderer.render(scene, camera);
+    applyPostFX(scene, camera);
   } else {
+    renderer.setRenderTarget(null);
     renderer.render(scene, camera);
   }
 }

@@ -1,0 +1,10 @@
+{
+  "name": "sprawl-tools",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@gltf-transform/core": "^3.0.0",
+    "@gltf-transform/extensions": "^3.0.0",
+    "vhacd-js": "^0.0.1"
+  }
+}

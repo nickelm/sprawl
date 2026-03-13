@@ -1,0 +1,114 @@
+{
+  "name": "M4",
+  "archetype": "carbine",
+  "version": 1,
+  "units": "cm",
+  "origin": "receiver_center",
+  "primitives": [
+    {
+      "id": "body",
+      "group": "receiver",
+      "type": "box",
+      "pos": [0, 0, 0],
+      "rot": [0, 0, 0],
+      "scale": [8, 10, 42],
+      "color": "#3a3a3a"
+    },
+    {
+      "id": "barrel",
+      "group": "barrel",
+      "type": "cylinder",
+      "pos": [0, 2, -38],
+      "rot": [0, 0, 0],
+      "scale": [1.8, 1.8, 38],
+      "color": "#2a2a2a"
+    },
+    {
+      "id": "handguard",
+      "group": "receiver",
+      "type": "box",
+      "pos": [0, 1, -24],
+      "rot": [0, 0, 0],
+      "scale": [7, 8, 22],
+      "color": "#3a3a3a"
+    },
+    {
+      "id": "magazine",
+      "group": "magazine",
+      "type": "box",
+      "pos": [0, -13, 5],
+      "rot": [0, 0, 0],
+      "scale": [6, 16, 4.5],
+      "color": "#3a3a3a"
+    },
+    {
+      "id": "stock_tube",
+      "group": "stock",
+      "type": "cylinder",
+      "pos": [0, 1, 30],
+      "rot": [0, 0, 0],
+      "scale": [1.5, 1.5, 18],
+      "color": "#4a4a4a"
+    },
+    {
+      "id": "stock_pad",
+      "group": "stock",
+      "type": "box",
+      "pos": [0, 1, 39],
+      "rot": [0, 0, 0],
+      "scale": [6, 8, 1.5],
+      "color": "#222222"
+    },
+    {
+      "id": "grip",
+      "group": "grip",
+      "type": "box",
+      "pos": [0, -9, 14],
+      "rot": [-14.32, 0, 0],
+      "scale": [5, 9, 3.5],
+      "color": "#333333"
+    },
+    {
+      "id": "sight_rear_left",
+      "group": "cosmetic",
+      "type": "box",
+      "pos": [-3, 6, -8],
+      "rot": [0, 0, 0],
+      "scale": [1.5, 3, 1.5],
+      "color": "#222222"
+    },
+    {
+      "id": "sight_rear_right",
+      "group": "cosmetic",
+      "type": "box",
+      "pos": [3, 6, -8],
+      "rot": [0, 0, 0],
+      "scale": [1.5, 3, 1.5],
+      "color": "#222222"
+    },
+    {
+      "id": "sight_front",
+      "group": "cosmetic",
+      "type": "box",
+      "pos": [0, 6, -55],
+      "rot": [0, 0, 0],
+      "scale": [1.5, 4, 1.5],
+      "color": "#222222"
+    }
+  ],
+  "attachmentPoints": {
+    "muzzle": { "pos": [0, 2, -57], "dir": [0, 0, -1] },
+    "optic_rail": { "pos": [0, 6, -4], "dir": [0, 1, 0] },
+    "underbarrel": { "pos": [0, -3, -20], "dir": [0, -1, 0] },
+    "magazine": { "pos": [0, -5, 5], "dir": [0, -1, 0] },
+    "stock": { "pos": [0, 0, 21], "dir": [0, 0, 1] }
+  },
+  "viewmodel": {
+    "scale": 1.0,
+    "pos": [32, -28, -50],
+    "rot": [0, 0, 0]
+  },
+  "worldmodel": {
+    "scale": 0.4
+  }
+}

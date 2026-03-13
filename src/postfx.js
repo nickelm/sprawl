@@ -231,19 +231,31 @@ export function updatePostFXBlend(dt) {
 }
 
 // ─── RENDER WITH POST-FX ─────────────────────────────────────
+// Legacy path: renders scene itself + applies effect. Still works standalone.
 export function renderWithPostFX(scene, camera) {
   if (!_renderer || !_renderTarget) return;
 
-  // 1) Render heat mask (thermal only)
-  if (_mode === 'thermal') {
-    renderHeatMask(scene, camera);
-  }
+  if (_mode === 'thermal') renderHeatMask(scene, camera);
 
-  // 2) Render main scene to offscreen target
   _renderer.setRenderTarget(_renderTarget);
   _renderer.render(scene, camera);
 
-  // 3) Render fullscreen quad to screen
+  _renderer.setRenderTarget(null);
+  _renderer.render(_quadScene, _quadCamera);
+}
+
+// ─── SPLIT API (for outline pipeline integration) ────────────
+// Returns the render target that postfx reads its input from.
+// Outlines render INTO this target, then applyPostFX() composites to screen.
+export function getPostFXInputTarget() { return _renderTarget; }
+
+// Apply just the heat mask + fullscreen quad composite (no scene render).
+// Expects _renderTarget to already contain the outlined scene.
+export function applyPostFX(scene, camera) {
+  if (!_renderer || !_renderTarget) return;
+
+  if (_mode === 'thermal') renderHeatMask(scene, camera);
+
   _renderer.setRenderTarget(null);
   _renderer.render(_quadScene, _quadCamera);
 }

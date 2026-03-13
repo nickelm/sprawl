@@ -2,7 +2,16 @@
   "permissions": {
     "allow": [
       "Bash(node --check c:/Users/nikla/Dropbox/Dev/Sprawl/sprawl/src/nav.js)",
-      "Bash(grep -E \"\\\\.js$\")"
+      "Bash(grep -E \"\\\\.js$\")",
+      "Bash(node --check tools/decompose.js)",
+      "WebSearch",
+      "Bash(npm install:*)",
+      "Bash(node tools/decompose.js ../assets/low-poly_mk14_ebr.glb --archetype dmr --output recipes/mk14.json --category weapon --diagnostic)",
+      "Bash(node tools/decompose.js ../assets/low-poly_mk14_ebr.glb --category prop --output recipes/mk14-raw.json --diagnostic --raw-hulls)",
+      "Bash(node -e \":*)",
+      "Bash(node tools/decompose.js assets/low-poly_mk14_ebr.glb --category prop --output recipes/mk14-raw.json --diagnostic --raw-hulls)",
+      "Bash(node -c tools/decompose.js)",
+      "Bash(ls -lah /c/Users/nikla/Dropbox/Dev/Sprawl/sprawl/tools/*.html)"
     ]
   }
 }

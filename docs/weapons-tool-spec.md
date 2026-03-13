@@ -1,13 +1,13 @@
-# Weapon Model Tools — sprawl
+# Model Decomposition & Editor Tools — sprawl
 
 ## Context
 
-This spec defines two tools for producing procedural weapon models for `sprawl`:
+This spec defines two tools for producing procedural 3D models for `sprawl`. The primary use case is weapons (10 archetypes + attachments), but the pipeline is general-purpose — any 3D model (props, vehicles, furniture, street objects) can be decomposed into a primitive recipe and edited.
 
-1. **Decomposer** — Node.js CLI that takes a glTF/GLB file, voxelizes it, fits a small set of geometric primitives (boxes, cylinders) to approximate the silhouette, and outputs a JSON recipe.
-2. **Editor** — Browser-based Three.js tool that loads recipes, lets the user tag part groups, define attachment points, adjust/delete/add primitives, set colors, and export final weapon recipes.
+1. **Decomposer** — Node.js CLI that takes a 3D model file (GLB/glTF or OBJ), uses V-HACD to oversegment it into convex hulls, fits a box or cylinder primitive to each hull, merges adjacent similar primitives down to a budget, and outputs a JSON recipe.
+2. **Editor** — Browser-based Three.js tool that loads recipes, lets the user tag part groups, define attachment points, adjust/delete/add primitives, set colors, and export final recipes. Also supports authoring simple models from scratch (attachments, small props) without a source model.
 
-The JSON recipe is the interface between both tools and the game runtime. The game's `buildWeaponFromRecipe(json)` constructs a `THREE.Group` from the recipe at load time — no external model files shipped.
+The JSON recipe is the interface between both tools and the game runtime. The game's `buildModelFromRecipe(json)` constructs a `THREE.Group` from the recipe at load time — no external model files shipped.
 
 The decomposition is a lossy geometric approximation. The output is original authored geometry (primitive placements), not a derivative of the source mesh topology. Source models are reference-only and are not distributed.
 
@@ -18,6 +18,7 @@ The decomposition is a lossy geometric approximation. The output is original aut
 ```json
 {
   "name": "MK14",
+  "category": "weapon",
   "archetype": "dmr",
   "version": 1,
   "units": "cm",
@@ -65,14 +66,15 @@ The decomposition is a lossy geometric approximation. The output is original aut
 | Field | Description |
 |-------|-------------|
 | `name` | Display name |
-| `archetype` | One of: `pistol`, `revolver`, `smg`, `carbine`, `ar`, `battle_rifle`, `lmg`, `dmr`, `sniper`, `shotgun` |
+| `category` | `"weapon"`, `"attachment"`, `"prop"`, `"vehicle"`, `"furniture"` |
+| `archetype` | Weapon-specific. One of: `pistol`, `revolver`, `smg`, `carbine`, `ar`, `battle_rifle`, `lmg`, `dmr`, `sniper`, `shotgun`. Omit for non-weapons. |
 | `version` | Schema version (integer) |
 | `units` | Always `"cm"` — all dimensions in centimeters |
-| `origin` | Semantic label for the recipe's local origin. Conventionally the center of the receiver. |
+| `origin` | Semantic label for the recipe's local origin |
 | `primitives[]` | Array of primitive definitions (see §1.2) |
-| `attachmentPoints` | Named positions + directions where attachments mount (see §1.3) |
-| `viewmodel` | First-person display: scale, offset from camera, rotation |
-| `worldmodel` | Third-person / dropped: scale factor relative to viewmodel |
+| `attachmentPoints` | Named positions + directions where child models mount (see §1.3). Weapons use these for attachments; props can use them for placement anchors (e.g., a table's "surface" point). Optional. |
+| `viewmodel` | First-person display offset/scale. Weapon-specific. Optional. |
+| `worldmodel` | Third-person scale factor. Optional (default: use recipe scale as-is). |
 
 ### 1.2 Primitive Definition
 
@@ -106,175 +108,280 @@ Attachment points are set manually in the editor, not by the decomposer.
 
 ```bash
 node tools/decompose.js input.glb --output recipes/mk14.json \
-  --budget 25 --resolution 128 --archetype dmr
+  --budget 25 --max-hulls 80 --category weapon --archetype dmr
+
+node tools/decompose.js chair.obj --output recipes/office_chair.json \
+  --budget 15 --max-hulls 60 --category furniture
+
+node tools/decompose.js car.glb --output recipes/sedan.json \
+  --budget 40 --max-hulls 120 --category vehicle
 ```
 
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--output` | stdout | Output JSON path |
-| `--budget` | 25 | Max number of primitives |
-| `--resolution` | 128 | Voxel grid resolution along longest axis |
-| `--archetype` | required | Weapon archetype (sets default group colors) |
-| `--cylinder-bias` | 0.15 | Cylinder fit must beat box fit by this fraction to be chosen (avoids spurious cylinders) |
-| `--min-volume` | 0.5 | Min primitive volume as % of total mesh volume (filters dust) |
+| `--budget` | 25 | Target number of primitives in final output |
+| `--max-hulls` | 80 | Number of convex hulls V-HACD produces (oversegmentation count). Should be 2-4× budget. |
+| `--category` | `"prop"` | Recipe category: `weapon`, `attachment`, `prop`, `vehicle`, `furniture` |
+| `--archetype` | none | Weapon archetype (optional, sets default group heuristics + colors) |
+| `--circularity` | 0.80 | Min circularity for cylinder detection (lower = more cylinders) |
+| `--min-volume` | 0.5 | Min primitive volume as % of total mesh volume (filters noise) |
+| `--normalize-size` | 50 | Target size in cm for longest axis |
+| `--diagnostic` | false | Write an HTML visualization alongside the JSON output |
+| `--vhacd-resolution` | 100000 | V-HACD voxel resolution (higher = more detail, slower) |
+| `--vhacd-concavity` | 0.001 | V-HACD max concavity per hull (lower = tighter hulls) |
 
-### 2.2 Pipeline
+### 2.2 Supported Formats
+
+| Format | Extensions | Parser | Notes |
+|--------|-----------|--------|-------|
+| glTF Binary | `.glb` | `@gltf-transform/core` | Primary format. What Sketchfab exports. |
+| glTF | `.gltf` + `.bin` | `@gltf-transform/core` | Same parser, separate files. |
+| Wavefront OBJ | `.obj` (+ optional `.mtl`) | Custom parser (~80 lines) | Text format, trivial to parse. Just `v` and `f` lines. MTL ignored — we only need geometry. |
+
+Both paths produce the same intermediate representation: a flat `Float32Array` of vertex positions + a `Uint32Array` of triangle indices. Format differences vanish before V-HACD.
+
+### 2.3 Pipeline
 
 ```
-Load glTF → Normalize → Voxelize → Decompose → Fit Primitives → Filter → Output
+Load (GLB/OBJ) → Normalize → V-HACD Oversegment → Fit Primitive per Hull → Merge → Filter → Output
 ```
 
-#### 2.2.1 Load & Normalize
+#### 2.3.1 Load & Normalize
 
-Use a Node glTF parser (e.g. `@gltf-transform/core` or parse the binary manually — the mesh geometry is all we need: vertex positions and triangle indices).
+**OBJ parser:** Read the file line by line. Lines starting with `v ` are vertices (3 floats). Lines starting with `f ` are faces (triangle or quad indices, 1-indexed — convert to 0-indexed). Quads get split into two triangles. Skip everything else (normals, UVs, materials, comments). ~80 lines of code.
+
+**glTF parser:** Use `@gltf-transform/core` to read the document, iterate all meshes/primitives, extract position attributes and index buffers. Merge into one triangle soup.
 
 **Normalize the mesh:**
 1. Merge all mesh geometries into a single triangle soup.
 2. Compute bounding box.
 3. Translate so centroid is at origin.
-4. Uniform scale so the longest axis spans exactly 50cm (reasonable weapon scale). Record the scale factor for reference but the recipe will be edited to final dimensions in the editor.
+4. Uniform scale so the longest axis spans `--normalize-size` cm. Record the original dimensions for reference metadata.
 
-The normalization means every weapon starts at the same scale and centering. The editor adjusts final dimensions.
+The normalization means every model starts at a consistent scale and centering. The editor adjusts final dimensions.
 
-#### 2.2.2 Voxelize
+#### 2.3.2 V-HACD Oversegmentation
 
-Rasterize the triangle mesh into a 3D binary grid.
+Use the `vhacd-js` npm package, which wraps V-HACD as WASM:
 
-**Method:** For each triangle, rasterize it into the voxel grid using a triangle-box intersection test per voxel. Then flood-fill the exterior and invert to get a solid voxelization (surface rasterization alone leaves the interior empty).
+```javascript
+import { ConvexMeshDecomposition } from 'vhacd-js';
 
-Concrete steps:
-1. Allocate `Uint8Array` of size `resX * resY * resZ`.
-2. For each triangle in the mesh, compute its AABB in voxel coords, then for each voxel in that AABB, run a triangle-box overlap test. Mark hit voxels as `SURFACE`.
-3. Flood-fill from a corner voxel (guaranteed exterior if the grid has 1-voxel padding) marking all reachable non-SURFACE voxels as `EXTERIOR`.
-4. Everything not `EXTERIOR` and not `SURFACE` is `INTERIOR`.
-5. Final solid = `SURFACE ∪ INTERIOR`.
+const decomposer = await ConvexMeshDecomposition.create();
 
-At resolution 128, the grid is at most 128³ = ~2M voxels. Fits in ~2MB. Runs in under a second.
+const hulls = decomposer.computeConvexHulls(
+  { positions, indices },  // Float32Array, Uint32Array from §2.3.1
+  {
+    maxHulls: maxHulls,              // --max-hulls (default 80)
+    resolution: vhacdResolution,     // --vhacd-resolution (default 100000)
+    maximumConcavity: vhacdConcavity // --vhacd-concavity (default 0.001)
+  }
+);
 
-#### 2.2.3 Recursive Primitive Decomposition
+// hulls: array of { positions: Float32Array, indices: Uint32Array }
+// Each hull is a small convex mesh.
+```
 
-This is the core algorithm. Goal: cover the solid voxel volume with N primitives minimizing uncovered volume (undershoot) and excess volume (overshoot).
+**Why oversegment:** Request 2-4× more hulls than the final primitive budget. V-HACD at high hull counts produces small, tightly-fitting convex pieces that naturally correspond to structural features. A barrel becomes 3-5 small cylindrical hulls. A receiver becomes 2-3 blocky hulls. A magazine is 1-2 hulls. The merge pass (§2.3.4) combines them back down to budget.
+
+V-HACD uses proper volumetric concavity analysis to find segmentation boundaries. It handles arbitrary shapes — no assumptions about necks, elongation, or axis alignment.
+
+**Tuning `--max-hulls`:** If the result has too few distinct parts (barrel and receiver merged), increase `--max-hulls`. If it's too fragmented, decrease it. 2-4× budget is the starting point.
+
+#### 2.3.3 Primitive Fitting per Hull
+
+For each convex hull from V-HACD, fit a single box or cylinder. Since each hull is already convex and compact, PCA-OBB fitting is stable — the problems that plagued PCA on full meshes (elongation, eigenvalue instability) don't apply.
+
+**Step 1: Hull statistics**
+
+For each hull:
+1. Compute vertex centroid → primitive center.
+2. Compute the 3×3 covariance matrix of vertex positions.
+3. Eigendecomposition → 3 eigenvectors (principal axes) + 3 eigenvalues.
+
+**Step 2: Oriented Bounding Box (OBB)**
+
+1. Project all hull vertices onto the 3 eigenvector axes.
+2. Per axis: min and max projection → half-extents.
+3. Result: center, 3 axis vectors, 3 full extents.
+4. Convert rotation matrix (from eigenvectors) to Euler angles (XYZ order, degrees).
+
+**Step 3: Cylinder test**
+
+1. Eigenvector with the **largest** eigenvalue = candidate cylinder axis.
+2. Project all hull vertices onto the plane perpendicular to this axis.
+3. Compute **circularity** of the 2D convex hull of the projection: `4π × area / perimeter²`. Circle = 1.0; square ≈ 0.785.
+4. Compute **aspect ratio**: extent along cylinder axis / diameter of cross-section.
+
+A hull becomes a cylinder when:
+- `circularity > --circularity` (default 0.80), AND
+- `aspectRatio > 1.5`
 
 ```
-function decompose(voxels, budget, results):
-    if budget == 0 or countSolid(voxels) < minVolume:
-        return
+function fitPrimitive(hull):
+    { center, eigenvectors, eigenvalues, extents } = analyzeHull(hull)
+    rotationEuler = matrixToEuler(eigenvectors)
 
-    // Fit best box
-    box = fitOBB(voxels)
-    boxScore = score(voxels, box)
+    longestAxis = argmax(eigenvalues)
+    crossSection = projectToPlane(hull.positions, eigenvectors[longestAxis])
+    circ = circularity(convexHull2D(crossSection))
+    aspect = extents[longestAxis] / max(other extents)
 
-    // Fit best cylinder
-    cyl = fitCylinder(voxels)
-    cylScore = score(voxels, cyl)
-
-    // Pick winner (cylinder must beat box by bias margin)
-    if cylScore > boxScore * (1 + cylinderBias):
-        best = cyl
+    if circ > circularityThreshold and aspect > 1.5:
+        radius = avgDistFromAxis(hull.positions, eigenvectors[longestAxis], center)
+        height = extents[longestAxis]
+        return {
+            type: "cylinder",
+            pos: center,
+            rot: cylinderAlignmentEuler(eigenvectors[longestAxis]),
+            scale: [radius, radius, height],
+            _volume: PI * radius * radius * height,
+            _vertices: hull.positions  // retained for merge refitting
+        }
     else:
-        best = box
-
-    results.push(best)
-
-    // Subtract best primitive's voxels from the volume
-    remaining = subtract(voxels, best)
-
-    // Find connected components in remaining
-    components = connectedComponents(remaining)
-
-    // Sort components by volume, descending
-    components.sort(byVolume, descending)
-
-    // Distribute remaining budget across components proportional to volume
-    for comp in components:
-        share = max(1, round(budget_remaining * comp.volume / total_remaining))
-        decompose(comp, share, results)
+        return {
+            type: "box",
+            pos: center,
+            rot: rotationEuler,
+            scale: extents,
+            _volume: extents[0] * extents[1] * extents[2],
+            _vertices: hull.positions
+        }
 ```
 
-**Score function:**
+Fields prefixed with `_` are internal (used during merging, stripped before output).
+
+#### 2.3.4 Adjacency Graph and Iterative Merging
+
+After fitting a primitive to each hull, we typically have ~80 primitives for a 25-primitive budget. The merge pass reduces this to the target count by iteratively combining the most compatible adjacent pair.
+
+**Step 1: Build adjacency graph**
+
+Two hulls are adjacent if any vertex in hull A is within `adjacencyThreshold` distance of any vertex in hull B. Use a spatial hash (grid cells sized to the threshold) for efficient lookup.
+
+`adjacencyThreshold` = a small fixed value, e.g. 0.5cm after normalization. V-HACD hulls that were adjacent in the original mesh will have vertices very close to each other. This value isn't sensitive — just needs to bridge the tiny gaps between hull boundaries.
+
+**Step 2: Iterative greedy merge**
 
 ```
-score(voxels, primitive) = coveredVoxels / (totalSolidVoxels + overshootVoxels * overshootPenalty)
+function mergeDown(primitives, adjacency, budget):
+    while primitives.length > budget:
+        bestPair = null
+        bestCost = Infinity
+
+        for each adjacent pair (A, B) in adjacency:
+            merged = fitPrimitive(combineVertices(A, B))
+            cost = mergeCost(A, B, merged)
+
+            if cost < bestCost:
+                bestCost = cost
+                bestPair = (A, B)
+                bestMerged = merged
+
+        if bestPair == null:
+            break  // no more adjacent pairs
+
+        // Replace A and B with merged primitive
+        remove A and B from primitives
+        add bestMerged
+        // bestMerged inherits all neighbors of A and B
+        update adjacency graph
+
+    return primitives
 ```
 
-Where:
-- `coveredVoxels` = solid voxels inside the primitive
-- `overshootVoxels` = non-solid voxels inside the primitive (primitive extends beyond mesh)
-- `overshootPenalty` = 0.5 (overshoot is bad but undershoot is worse — we'd rather be slightly bigger than leave gaps)
+**Merge cost function:**
 
-#### 2.2.4 OBB Fitting (Oriented Bounding Box)
+```
+mergeCost(A, B, merged) =
+    volumeIncrease + typePenalty + rotationPenalty
 
-For a set of solid voxel positions:
+where:
+    volumeIncrease = merged._volume / (A._volume + B._volume) - 1.0
+        // 0.0 = perfect; 0.5 = 50% overshoot. This is the dominant term.
 
-1. Compute the 3×3 covariance matrix of voxel center positions.
-2. Eigendecomposition → 3 eigenvectors = principal axes, 3 eigenvalues = variance along each axis.
-3. Project all voxel centers onto the eigenvector axes.
-4. Per axis: min and max projection = box extents along that axis.
-5. Result: center position, 3 axis vectors, 3 half-extents.
+    typePenalty = (A.type != B.type) ? 0.3 : 0.0
+        // Discourage merging a box with a cylinder
 
-Convert to recipe format: `pos` = center, `rot` = Euler angles from the eigenvector rotation matrix, `scale` = full extents (2 × half-extents).
+    rotationPenalty = angleBetweenPrincipalAxes(A, B) / 180.0 * 0.2
+        // Discourage merging primitives at very different orientations
+```
 
-PCA-OBB is not the tightest possible OBB, but it's fast (O(n) in voxel count) and gives good results for near-prismatic shapes. Weapons are mostly near-prismatic.
+Volume increase dominates. Two adjacent barrel hulls (thin cylinders along the same axis) merge with near-zero volume increase — they become one longer cylinder. A barrel hull next to a receiver hull produces a bloated box with high volume increase — the algorithm avoids this merger until forced to by the budget.
 
-#### 2.2.5 Cylinder Fitting
+**`combineVertices`:** Concatenate the `_vertices` arrays from both primitives. Run `fitPrimitive()` on the combined point cloud. This naturally produces the tightest primitive for the union.
 
-1. Use PCA as above. The eigenvector with the largest eigenvalue is the cylinder axis candidate (longest dimension).
-2. Project all voxel centers onto the plane perpendicular to this axis.
-3. Compute the bounding circle of the 2D projection: center + radius. (Use the average distance to centroid as radius — more robust than max distance for noisy voxels.)
-4. Cylinder height = extent along the axis.
-5. Result: center position, axis direction, radius, height.
+**Step 3: Post-merge cleanup**
 
-A cylinder fits better than a box when the cross-section is roughly circular — barrels, scopes, grips. The `cylinderBias` threshold prevents marginal cases from becoming cylinders (a slightly rounded box should stay a box for the low-poly look).
+After reaching budget:
+1. Re-run `fitPrimitive` on each surviving primitive's vertex set for tight fits.
+2. **Snap rotations:** if any Euler angle is within 3° of a multiple of 90°, snap it to that multiple. Produces cleaner axis-aligned results for the low-poly aesthetic.
 
-#### 2.2.6 Filtering
+#### 2.3.5 Filtering
 
-After decomposition:
-1. Remove primitives smaller than `minVolume` percent of total mesh volume. These are noise from thin features.
-2. Merge primitives that overlap > 80% and have similar orientation (< 10° rotation difference). Replace with the larger one.
-3. Sort by group assignment (see §2.3).
+After merging:
+1. Remove primitives smaller than `--min-volume` percent of total mesh volume. These capture noise from thin features (trigger guards, sling mounts, tiny protrusions).
+2. Sort by group assignment (see §2.3.6).
 
-#### 2.2.7 Auto-Group Assignment
+#### 2.3.6 Auto-Group Assignment
 
-The decomposer makes a best-effort group assignment based on position along the Z axis (barrel direction, longest axis after normalization):
+The decomposer assigns a best-effort group based on category and spatial heuristics.
+
+**Weapons** (`--category weapon` with `--archetype`): assign by position along the Z axis (longest axis = barrel direction after normalization):
 
 | Z range (normalized) | Group |
 |-----------------------|-------|
 | > 60% forward | `barrel` |
 | 20–60% forward | `receiver` |
-vele| 0–20% (center area), below midline Y | `magazine` or `grip` |
+| 0–20% (center area), below midline Y | `magazine` or `grip` |
 | < 0% (rear) | `stock` |
 | Small primitives on top of receiver | `optic_rail` |
 | Small primitives below forend | `underbarrel` |
 
+**Non-weapons** (`prop`, `furniture`, `vehicle`): all primitives get group `"body"`. The user assigns meaningful groups in the editor. Group tags are freeform strings (e.g., `"leg"`, `"seat"`, `"wheel"`, `"hood"`).
+
 This is heuristic and approximate. The editor is where the user corrects group assignments.
 
-### 2.3 Dependencies
+### 2.4 Dependencies
 
-Minimal Node dependencies:
-- glTF parsing: `@gltf-transform/core` + `@gltf-transform/extensions` (reads GLB/glTF, extracts mesh data)
-- Linear algebra: write the PCA/eigen inline (3×3 symmetric matrix eigendecomposition is ~60 lines) or use a small lib like `ml-matrix`
-- No Three.js dependency in the CLI tool
+```json
+{
+  "dependencies": {
+    "vhacd-js": "^0.0.1",
+    "@gltf-transform/core": "^4.0.0",
+    "@gltf-transform/extensions": "^4.0.0"
+  }
+}
+```
 
-### 2.4 Output
+- **`vhacd-js`** — WASM build of V-HACD. Provides `ConvexMeshDecomposition` API. ~42MB package (WASM binary); irrelevant for an offline tool.
+- **`@gltf-transform/core`** — glTF/GLB parsing. Extracts mesh geometry.
+- **OBJ parsing** — custom (~80 lines), no dependency.
+- **Linear algebra** — 3×3 eigendecomposition for PCA-OBB per hull (~60 lines inline) or use `ml-matrix`. Only applied to small compact hulls, not the full mesh — so PCA is stable.
 
-The decomposer writes a JSON recipe per §1. Group assignments are best-effort. Colors are defaults from archetype palette. Attachment points are not set (editor responsibility). The `viewmodel` and `worldmodel` fields get sensible defaults.
+### 2.5 Output
+
+The decomposer writes a JSON recipe per §1. Group assignments are best-effort (weapons) or default `"body"` (everything else). Colors are defaults from the category/archetype palette. Attachment points are not set (editor responsibility).
+
+**Diagnostic mode** (`--diagnostic`): additionally writes an HTML file next to the output JSON that renders the source mesh as a wireframe overlaid with the fitted primitives and V-HACD hull boundaries. Uses a self-contained inline Three.js script. Useful for evaluating decomposition quality before opening the editor.
 
 ---
 
-## 3. Stage 2: Weapon Editor (Browser Tool)
+## 3. Stage 2: Model Editor (Browser Tool)
 
 ### 3.1 Overview
 
-Standalone HTML file at `tools/weapon-editor.html`. No build step. Imports Three.js from CDN (same r128 as the game). Single file, self-contained.
+Standalone HTML file at `tools/model-editor.html`. No build step. Imports Three.js from CDN (same r128 as the game). Single file, self-contained.
 
 **Layout:** Three.js viewport (80% width) + sidebar panel (20% width) with controls.
 
 ### 3.2 Viewport
 
 - `OrbitControls` for camera (rotate, pan, zoom).
-- Grid floor (1cm spacing, 50cm extent) for scale reference.
+- Grid floor (1cm spacing, extent adapts to model size) for scale reference.
 - Axis indicator at origin (RGB = XYZ).
-- Weapon primitives rendered with `MeshLambertMaterial({ flatShading: true })` — WYSIWYG with the game.
+- Primitives rendered with `MeshLambertMaterial({ flatShading: true })` — WYSIWYG with the game.
 - Selected primitive highlighted with wireframe overlay.
 
 ### 3.3 Sidebar Controls
@@ -282,7 +389,8 @@ Standalone HTML file at `tools/weapon-editor.html`. No build step. Imports Three
 **File operations:**
 - Import recipe JSON (file picker or drag-drop)
 - Export recipe JSON (download)
-- Import reference glTF (renders as translucent ghost at opacity 0.15 — for visual comparison, not exported)
+- Import reference model — GLB or OBJ (renders as translucent ghost at opacity 0.15 — for visual comparison, not exported)
+- New empty recipe (starts blank for hand-authoring small models)
 
 **Primitive list:**
 - Scrollable list of all primitives by `id`
@@ -293,7 +401,7 @@ Standalone HTML file at `tools/weapon-editor.html`. No build step. Imports Three
 
 **Selected primitive properties:**
 - `id` (text input)
-- `group` (dropdown: receiver, barrel, stock, magazine, muzzle, underbarrel, optic_rail, grip, trigger_guard, cosmetic)
+- `group` (editable combo box: dropdown with presets + freeform text entry. Weapon presets: receiver, barrel, stock, magazine, muzzle, underbarrel, optic_rail, grip, trigger_guard, cosmetic. For non-weapons: body, leg, seat, wheel, hood, etc. — any string.)
 - `type` (box / cylinder — changing type re-fits the primitive)
 - `pos` [x, y, z] (number inputs, drag-adjustable)
 - `rot` [rx, ry, rz] (degrees)
@@ -306,19 +414,22 @@ Standalone HTML file at `tools/weapon-editor.html`. No build step. Imports Three
 - Snapping: hold Shift for 0.5cm translate snap, 5° rotate snap, 0.5cm scale snap
 
 **Attachment points:**
-- List of named points (muzzle, optic_rail, underbarrel, magazine, stock)
-- Each has pos [x,y,z] and dir [x,y,z]
+- Editable list of named points (user adds/removes freely)
+- Weapon defaults: muzzle, optic_rail, underbarrel, magazine, stock
+- Each has: name (string), pos [x,y,z], dir [x,y,z]
 - Click to select → shows a small cone gizmo in viewport at the point position, oriented along `dir`
 - Draggable via TransformControls
+- "Add Point" button creates a new named point at origin
 
-**Viewmodel preview:**
+**Viewmodel preview** (weapons only):
 - Toggle button: switches camera to a first-person preview position
 - Shows the weapon at `viewmodel.pos` / `viewmodel.scale` relative to a camera stand-in
 - Lets the user adjust viewmodel offset and see how it looks in-game
 
 **Metadata:**
 - `name` (text)
-- `archetype` (dropdown)
+- `category` (dropdown)
+- `archetype` (dropdown, visible only when category = weapon)
 
 ### 3.4 Keyboard Shortcuts
 
@@ -373,10 +484,10 @@ Low priority. Boxes and cylinders cover 90% of weapon silhouettes.
 
 ## 4. Game Runtime Loader
 
-In `src/weapons.js` (or a new `src/weapon-models.js`):
+In `src/models.js` (new file):
 
 ```javascript
-function buildWeaponFromRecipe(recipe) {
+function buildModelFromRecipe(recipe) {
   const group = new THREE.Group();
   group.name = recipe.name;
 
@@ -416,33 +527,46 @@ function buildWeaponFromRecipe(recipe) {
 
 Cylinder segment count is 8 — enough for a readable low-poly cylinder, matches the game's aesthetic. No need for smooth.
 
-**Attachment application:** When an attachment is equipped, the runtime:
+**Attachment application** (weapons): When an attachment is equipped, the runtime:
 1. Looks up the attachment point by name.
 2. Optionally removes primitives in the target group (e.g., equipping a suppressor may hide the default muzzle geometry).
 3. Adds attachment primitives at the attachment point position, oriented along `dir`.
 
-Attachment recipes are separate JSON files with the same primitive format, just smaller (2-5 primitives each).
+Attachment recipes are separate JSON files with the same primitive format, just smaller (2-5 primitives each). Simple attachments (suppressor = 1 cylinder, vertical grip = 2 boxes) can be hand-authored directly in the editor without running the decomposer.
+
+**Props and furniture:** Same loader, no attachment logic. The recipe is the final model. Place in the world at the desired position and scale.
 
 ---
 
 ## 5. Workflow Summary
 
+**Complex models (weapons, vehicles, detailed props):**
 ```
-Sketchfab model (.glb)
+Source model (.glb / .obj)
     ↓
-decompose.js (Node CLI)
+decompose.js (Node CLI) — V-HACD → fit → merge
     ↓
 Raw recipe (.json) — primitives with best-guess groups
     ↓
-weapon-editor.html (browser)
+model-editor.html (browser)
     ↓  manual: tag groups, set colors, define attachment points,
     ↓  delete/add/adjust primitives, set viewmodel position
     ↓
 Final recipe (.json)
     ↓
-buildWeaponFromRecipe() in game runtime
+buildModelFromRecipe() in game runtime
     ↓
 THREE.Group with MeshLambertMaterial flatShading
+```
+
+**Simple models (attachments, small props):**
+```
+model-editor.html (browser)
+    ↓  hand-author from scratch: add primitives, position, color, export
+    ↓
+Recipe (.json)
+    ↓
+buildModelFromRecipe() in game runtime
 ```
 
 Source .glb files are never shipped. Only the recipes. The recipes are original authored geometry — arrays of positioned primitives.
@@ -452,23 +576,23 @@ Source .glb files are never shipped. Only the recipes. The recipes are original 
 ## 6. Implementation Order
 
 1. **Recipe JSON schema** — define and validate the format.
-2. **Runtime loader** — `buildWeaponFromRecipe()` in the game. Test with a hand-written recipe for one weapon.
-3. **Decomposer CLI** — voxelizer, PCA-OBB, cylinder fit, recursive decomposition. Test against 2-3 Sketchfab models.
+2. **Runtime loader** — `buildModelFromRecipe()` in the game. Test with a hand-written recipe for one weapon.
+3. **Decomposer CLI** — V-HACD oversegment, PCA-OBB/cylinder fit per hull, adjacency merge. Test against 2-3 Sketchfab models.
 4. **Editor: viewport + primitive rendering** — load recipe, render with proper materials, orbit camera.
 5. **Editor: selection + transform** — click to select, TransformControls, property panel.
-6. **Editor: groups + colors** — group dropdown, color picker, palette swatches.
+6. **Editor: groups + colors** — group combo box, color picker, palette swatches.
 7. **Editor: attachment points** — point gizmos, draggable, dir arrows.
 8. **Editor: import/export** — JSON file I/O, reference model ghost overlay.
 9. **Editor: undo, shortcuts, viewmodel preview.**
 10. **Attachment recipe format** — small recipe files for suppressors, grips, optics, etc.
 
-Steps 1-3 produce usable weapon recipes. Steps 4-8 make editing comfortable. Step 9-10 complete the pipeline.
+Steps 1-3 produce usable recipes. Steps 4-8 make editing comfortable. Steps 9-10 complete the weapon pipeline.
 
 ---
 
 ## 7. Performance Notes
 
-- Decomposer runs offline; performance is not critical. A 128³ voxel grid with 25-primitive budget should finish in < 2 seconds.
+- Decomposer runs offline; performance is not critical. V-HACD at 100k resolution + 80 hulls typically runs in 2-10 seconds depending on mesh complexity. The merge pass is fast (greedy O(n²) on ~80 primitives).
 - Editor is a lightweight Three.js scene with < 50 meshes. No performance concerns.
-- Runtime: `buildWeaponFromRecipe()` creates 15-30 meshes per weapon. For the viewmodel (1 weapon visible), this is trivial. For world models (dropped weapons), consider merging the group into a single BufferGeometry at load time to reduce draw calls.
-- Weapon recipe JSON files are < 5KB each. All 10 archetypes + 20 attachments < 100KB total.
+- Runtime: `buildModelFromRecipe()` creates 15-40 meshes per model. For weapon viewmodels (1 visible at a time), this is trivial. For world models (dropped weapons, props, furniture), merge the group into a single `BufferGeometry` at load time to reduce draw calls. A building with 10 furniture pieces × 20 primitives each = 200 meshes without merging — merge is mandatory for props.
+- Recipe JSON files are < 5KB each (weapons), < 3KB (attachments/small props), < 10KB (vehicles). Full asset set for the game < 500KB total.

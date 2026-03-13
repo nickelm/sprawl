@@ -1,0 +1,1921 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SPRAWL — Weapon Editor</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Rajdhani:wght@600;700&display=swap" rel="stylesheet">
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+  display: flex;
+  height: 100vh;
+  background: #1a1a2e;
+  color: #eee;
+  font-family: 'Share Tech Mono', monospace;
+  overflow: hidden;
+}
+
+/* ── Viewport ── */
+#viewport {
+  flex: 4;
+  position: relative;
+  overflow: hidden;
+}
+#viewport canvas { display: block; }
+
+#mode-indicator {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  font-family: 'Rajdhani', sans-serif;
+  font-weight: 700;
+  font-size: 14px;
+  color: #f39c12;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  pointer-events: none;
+  user-select: none;
+}
+
+#shortcut-bar {
+  position: absolute;
+  bottom: 8px;
+  left: 12px;
+  font-size: 10px;
+  color: rgba(255,255,255,0.3);
+  pointer-events: none;
+  user-select: none;
+}
+
+/* ── Sidebar ── */
+#sidebar {
+  width: 280px;
+  min-width: 260px;
+  display: flex;
+  flex-direction: column;
+  background: #0f0f1a;
+  border-left: 1px solid #2a2a3a;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+#sidebar::-webkit-scrollbar { width: 6px; }
+#sidebar::-webkit-scrollbar-track { background: #0f0f1a; }
+#sidebar::-webkit-scrollbar-thumb { background: #2a2a3a; border-radius: 3px; }
+
+#header {
+  padding: 10px 14px;
+  background: #0a0a14;
+  border-bottom: 1px solid #2a2a3a;
+  flex-shrink: 0;
+}
+#header h1 {
+  font-family: 'Rajdhani', sans-serif;
+  font-size: 15px;
+  font-weight: 700;
+  color: #f39c12;
+  letter-spacing: 3px;
+  text-transform: uppercase;
+}
+#header h1 span { color: #e74c3c; }
+
+.section {
+  padding: 10px 14px;
+  border-bottom: 1px solid #1e1e2e;
+}
+
+.section-title {
+  font-size: 10px;
+  color: rgba(255,255,255,0.4);
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  margin-bottom: 6px;
+}
+
+.btn-row { display: flex; gap: 4px; margin-bottom: 6px; }
+
+button {
+  background: #1e1e3a;
+  color: #ccc;
+  border: 1px solid #3a3a5a;
+  padding: 5px 8px;
+  cursor: pointer;
+  font-family: 'Share Tech Mono', monospace;
+  font-size: 10px;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  flex: 1;
+}
+button:hover { background: #2a2a4a; color: #eee; }
+button.accent { border-color: #2ecc71; color: #2ecc71; }
+button.accent:hover { background: #0f2a1a; }
+button.active { background: #2a2a4a; border-color: #f39c12; color: #f39c12; }
+button.small { padding: 3px 6px; font-size: 9px; flex: none; }
+button.danger { border-color: #e74c3c; color: #e74c3c; }
+button.danger:hover { background: #2a1010; }
+
+select, input[type="text"], input[type="number"] {
+  background: #1a1a2e;
+  color: #eee;
+  border: 1px solid #3a3a5a;
+  padding: 4px 6px;
+  font-family: 'Share Tech Mono', monospace;
+  font-size: 11px;
+  width: 100%;
+}
+select:focus, input:focus { outline: none; border-color: #f39c12; }
+input[type="number"] { width: 60px; }
+input[type="color"] {
+  width: 28px; height: 24px;
+  border: 1px solid #3a3a5a;
+  background: none;
+  padding: 0;
+  cursor: pointer;
+}
+
+.field-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-bottom: 4px;
+}
+.field-label {
+  font-size: 10px;
+  color: rgba(255,255,255,0.5);
+  width: 28px;
+  flex-shrink: 0;
+}
+.field-row input[type="number"] { flex: 1; min-width: 0; }
+
+.xyz-row {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  margin-bottom: 4px;
+}
+.xyz-label {
+  font-size: 10px;
+  color: rgba(255,255,255,0.5);
+  width: 32px;
+  flex-shrink: 0;
+}
+.xyz-row input { flex: 1; min-width: 0; }
+
+/* Primitives list */
+#primitives-list {
+  max-height: 200px;
+  overflow-y: auto;
+  margin-bottom: 6px;
+}
+#primitives-list::-webkit-scrollbar { width: 4px; }
+#primitives-list::-webkit-scrollbar-thumb { background: #2a2a3a; }
+
+.prim-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 6px;
+  cursor: pointer;
+  border-left: 3px solid transparent;
+  font-size: 11px;
+}
+.prim-item:hover { background: rgba(255,255,255,0.03); }
+.prim-item.selected { border-left-color: #f39c12; background: rgba(243,156,18,0.08); }
+.prim-dot {
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.prim-id { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.prim-group { font-size: 9px; color: rgba(255,255,255,0.3); }
+
+/* Palette swatches */
+.palette-row { display: flex; gap: 4px; margin-bottom: 6px; flex-wrap: wrap; }
+.swatch {
+  width: 22px; height: 22px;
+  border: 2px solid #3a3a5a;
+  cursor: pointer;
+}
+.swatch:hover { border-color: #eee; }
+.swatch.active { border-color: #f39c12; }
+
+/* Attachment points */
+.attach-item {
+  padding: 6px;
+  margin-bottom: 4px;
+  background: rgba(255,255,255,0.02);
+  border: 1px solid #1e1e2e;
+}
+.attach-item.selected { border-color: #f39c12; }
+.attach-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 4px;
+}
+.attach-name {
+  font-size: 11px;
+  color: #f39c12;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+
+/* Validation */
+#validation-output {
+  font-size: 10px;
+  max-height: 80px;
+  overflow-y: auto;
+}
+.val-ok { color: #2ecc71; }
+.val-err { color: #e74c3c; }
+
+/* Properties panel when nothing selected */
+#properties.empty { color: rgba(255,255,255,0.3); font-size: 11px; font-style: italic; }
+</style>
+</head>
+<body>
+
+<!-- Viewport -->
+<div id="viewport">
+  <div id="mode-indicator">TRANSLATE</div>
+  <div id="shortcut-bar">W/E/R mode | Delete | D dup | G grid | F focus | H ref | 1/2/3 views | Ctrl+S export | Ctrl+Z undo</div>
+</div>
+
+<!-- Sidebar -->
+<div id="sidebar">
+  <div id="header">
+    <h1><span>SPRAWL</span> Weapon Editor</h1>
+  </div>
+
+  <!-- File operations -->
+  <div class="section">
+    <div class="section-title">File</div>
+    <div class="btn-row">
+      <button id="btn-new">New</button>
+      <button id="btn-import">Import</button>
+      <button id="btn-export" class="accent">Export</button>
+    </div>
+    <div class="btn-row">
+      <button id="btn-import-ref" title="Load .glb or .zip (gltf+bin)">Import Ref</button>
+      <button id="btn-toggle-vm">VM Preview</button>
+    </div>
+    <div class="btn-row">
+      <button class="small" id="btn-rot-x" title="Rotate all primitives 90° around X">Rot X</button>
+      <button class="small" id="btn-rot-y" title="Rotate all primitives 90° around Y">Rot Y</button>
+      <button class="small" id="btn-rot-z" title="Rotate all primitives 90° around Z">Rot Z</button>
+    </div>
+  </div>
+
+  <!-- Metadata -->
+  <div class="section">
+    <div class="section-title">Metadata</div>
+    <div class="field-row">
+      <span class="field-label">Name</span>
+      <input type="text" id="meta-name" style="flex:1">
+    </div>
+    <div class="field-row">
+      <span class="field-label">Type</span>
+      <select id="meta-archetype" style="flex:1"></select>
+    </div>
+  </div>
+
+  <!-- Primitives -->
+  <div class="section">
+    <div class="section-title">Primitives</div>
+    <div class="field-row">
+      <select id="group-filter" style="flex:1"><option value="all">All Groups</option></select>
+      <button class="small" id="btn-add-box">+Box</button>
+      <button class="small" id="btn-add-cyl">+Cyl</button>
+    </div>
+    <div id="primitives-list"></div>
+  </div>
+
+  <!-- Properties -->
+  <div class="section">
+    <div class="section-title">Properties</div>
+    <div id="properties" class="empty">No primitive selected</div>
+  </div>
+
+  <!-- Colors -->
+  <div class="section" id="color-section" style="display:none">
+    <div class="section-title">Color</div>
+    <div class="field-row">
+      <input type="color" id="color-picker" value="#3a3a3a">
+      <button class="small" id="btn-apply-group-color">Apply to Group</button>
+    </div>
+    <div class="palette-row" id="palette"></div>
+  </div>
+
+  <!-- Attachment Points -->
+  <div class="section">
+    <div class="section-title">Attachment Points</div>
+    <div id="attachments-list"></div>
+    <div class="field-row" style="margin-top:6px">
+      <select id="attach-add-select" style="flex:1"></select>
+      <button class="small" id="btn-add-attach">Add</button>
+    </div>
+  </div>
+
+  <!-- Viewmodel -->
+  <div class="section">
+    <div class="section-title">Viewmodel</div>
+    <div class="xyz-row">
+      <span class="xyz-label">Pos</span>
+      <input type="number" id="vm-px" step="1">
+      <input type="number" id="vm-py" step="1">
+      <input type="number" id="vm-pz" step="1">
+    </div>
+    <div class="xyz-row">
+      <span class="xyz-label">Rot</span>
+      <input type="number" id="vm-rx" step="1">
+      <input type="number" id="vm-ry" step="1">
+      <input type="number" id="vm-rz" step="1">
+    </div>
+    <div class="field-row">
+      <span class="field-label">Scale</span>
+      <input type="number" id="vm-scale" step="0.1" min="0.01" style="flex:1">
+    </div>
+  </div>
+
+  <!-- Validation -->
+  <div class="section">
+    <div class="section-title">Validation</div>
+    <div id="validation-output" class="val-ok">OK</div>
+  </div>
+</div>
+
+<!-- Hidden file inputs -->
+<input type="file" id="file-import" accept=".json" style="display:none">
+<input type="file" id="file-import-ref" accept=".glb,.zip" style="display:none">
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.module.js",
+    "three/examples/jsm/controls/OrbitControls": "https://cdn.jsdelivr.net/npm/three@0.128.0/examples/jsm/controls/OrbitControls.js",
+    "three/examples/jsm/controls/TransformControls": "https://cdn.jsdelivr.net/npm/three@0.128.0/examples/jsm/controls/TransformControls.js",
+    "three/examples/jsm/loaders/GLTFLoader": "https://cdn.jsdelivr.net/npm/three@0.128.0/examples/jsm/loaders/GLTFLoader.js"
+  }
+}
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls';
+import { TransformControls } from 'three/examples/jsm/controls/TransformControls';
+import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader';
+
+// ─── SCHEMA CONSTANTS ────────────────────────────────────────────────────────
+
+const DEG2RAD = Math.PI / 180;
+const RAD2DEG = 180 / Math.PI;
+
+const VALID_ARCHETYPES = [
+  'pistol', 'revolver', 'smg', 'carbine', 'ar',
+  'battle_rifle', 'lmg', 'dmr', 'sniper', 'shotgun'
+];
+
+const VALID_GROUPS = [
+  'receiver', 'barrel', 'stock', 'magazine', 'muzzle',
+  'underbarrel', 'optic_rail', 'grip', 'trigger_guard', 'cosmetic'
+];
+
+const VALID_TYPES = ['box', 'cylinder'];
+
+const VALID_ATTACHMENT_POINTS = [
+  'muzzle', 'optic_rail', 'underbarrel', 'magazine', 'stock'
+];
+
+const WEAPON_COLORS = {
+  'Receiver':   '#3a3a3a',
+  'Metal Dark': '#2a2a2a',
+  'Stock':      '#3d3530',
+  'Accent':     '#5a5a5a',
+  'Magazine':   '#3a3a3a',
+  'Optic':      '#2e2e2e',
+  'Lens':       '#1a3a4a'
+};
+
+const DEFAULT_RECIPE = {
+  name: "M4",
+  archetype: "carbine",
+  version: 1,
+  units: "cm",
+  origin: "receiver_center",
+  primitives: [
+    { id: "body", group: "receiver", type: "box", pos: [0,0,0], rot: [0,0,0], scale: [8,10,42], color: "#3a3a3a" },
+    { id: "barrel", group: "barrel", type: "cylinder", pos: [0,2,-38], rot: [0,0,0], scale: [1.8,1.8,38], color: "#2a2a2a" },
+    { id: "handguard", group: "receiver", type: "box", pos: [0,1,-24], rot: [0,0,0], scale: [7,8,22], color: "#3a3a3a" },
+    { id: "magazine", group: "magazine", type: "box", pos: [0,-13,5], rot: [0,0,0], scale: [6,16,4.5], color: "#3a3a3a" },
+    { id: "stock_tube", group: "stock", type: "cylinder", pos: [0,1,30], rot: [0,0,0], scale: [1.5,1.5,18], color: "#4a4a4a" },
+    { id: "stock_pad", group: "stock", type: "box", pos: [0,1,39], rot: [0,0,0], scale: [6,8,1.5], color: "#222222" },
+    { id: "grip", group: "grip", type: "box", pos: [0,-9,14], rot: [-14.32,0,0], scale: [5,9,3.5], color: "#333333" },
+    { id: "sight_rear_left", group: "cosmetic", type: "box", pos: [-3,6,-8], rot: [0,0,0], scale: [1.5,3,1.5], color: "#222222" },
+    { id: "sight_rear_right", group: "cosmetic", type: "box", pos: [3,6,-8], rot: [0,0,0], scale: [1.5,3,1.5], color: "#222222" },
+    { id: "sight_front", group: "cosmetic", type: "box", pos: [0,6,-55], rot: [0,0,0], scale: [1.5,4,1.5], color: "#222222" }
+  ],
+  attachmentPoints: {
+    muzzle:      { pos: [0,2,-57],  dir: [0,0,-1] },
+    optic_rail:  { pos: [0,6,-4],   dir: [0,1,0] },
+    underbarrel: { pos: [0,-3,-20], dir: [0,-1,0] },
+    magazine:    { pos: [0,-5,5],   dir: [0,-1,0] },
+    stock:       { pos: [0,0,21],   dir: [0,0,1] }
+  },
+  viewmodel: { scale: 1.0, pos: [32,-28,-50], rot: [0,0,0] },
+  worldmodel: { scale: 0.4 }
+};
+
+// ─── STATE ───────────────────────────────────────────────────────────────────
+
+const state = {
+  recipe: null,
+  selectedId: null,
+  selectionType: 'primitive', // 'primitive' | 'attachment'
+  transformMode: 'translate',
+  gridVisible: true,
+  referenceVisible: true,
+  viewmodelPreview: false,
+  undoStack: [],
+  redoStack: [],
+  isDragging: false
+};
+
+// ─── UNDO SYSTEM ─────────────────────────────────────────────────────────────
+
+function pushUndo() {
+  state.undoStack.push(JSON.stringify({
+    primitives: state.recipe.primitives,
+    attachmentPoints: state.recipe.attachmentPoints,
+    viewmodel: state.recipe.viewmodel
+  }));
+  if (state.undoStack.length > 50) state.undoStack.shift();
+  state.redoStack.length = 0;
+}
+
+function undo() {
+  if (state.undoStack.length === 0) return;
+  state.redoStack.push(JSON.stringify({
+    primitives: state.recipe.primitives,
+    attachmentPoints: state.recipe.attachmentPoints,
+    viewmodel: state.recipe.viewmodel
+  }));
+  const snap = JSON.parse(state.undoStack.pop());
+  state.recipe.primitives = snap.primitives;
+  state.recipe.attachmentPoints = snap.attachmentPoints;
+  state.recipe.viewmodel = snap.viewmodel;
+  state.selectedId = null;
+  rebuildScene();
+  refreshUI();
+}
+
+function redo() {
+  if (state.redoStack.length === 0) return;
+  state.undoStack.push(JSON.stringify({
+    primitives: state.recipe.primitives,
+    attachmentPoints: state.recipe.attachmentPoints,
+    viewmodel: state.recipe.viewmodel
+  }));
+  const snap = JSON.parse(state.redoStack.pop());
+  state.recipe.primitives = snap.primitives;
+  state.recipe.attachmentPoints = snap.attachmentPoints;
+  state.recipe.viewmodel = snap.viewmodel;
+  state.selectedId = null;
+  rebuildScene();
+  refreshUI();
+}
+
+// ─── VALIDATION ──────────────────────────────────────────────────────────────
+
+function isArray3(v) {
+  return Array.isArray(v) && v.length === 3 && v.every(n => typeof n === 'number' && isFinite(n));
+}
+
+function validateRecipe(recipe) {
+  const errors = [];
+  if (!recipe || typeof recipe !== 'object') return ['Recipe must be a non-null object'];
+  if (typeof recipe.name !== 'string' || !recipe.name) errors.push('Missing "name"');
+  if (!VALID_ARCHETYPES.includes(recipe.archetype)) errors.push(`Invalid archetype: "${recipe.archetype}"`);
+  if (!Number.isInteger(recipe.version) || recipe.version < 1) errors.push('Invalid "version"');
+  if (recipe.units !== 'cm') errors.push('units must be "cm"');
+  if (!Array.isArray(recipe.primitives) || recipe.primitives.length === 0) {
+    errors.push('Empty primitives array');
+    return errors;
+  }
+  const ids = new Set();
+  for (let i = 0; i < recipe.primitives.length; i++) {
+    const p = recipe.primitives[i];
+    const pfx = `prim[${i}]`;
+    if (!p.id || ids.has(p.id)) errors.push(`${pfx}: invalid/duplicate id`);
+    else ids.add(p.id);
+    if (!VALID_GROUPS.includes(p.group)) errors.push(`${pfx}: invalid group "${p.group}"`);
+    if (!VALID_TYPES.includes(p.type)) errors.push(`${pfx}: invalid type`);
+    if (!isArray3(p.pos)) errors.push(`${pfx}: bad pos`);
+    if (!isArray3(p.rot)) errors.push(`${pfx}: bad rot`);
+    if (!isArray3(p.scale) || p.scale.some(v => v <= 0)) errors.push(`${pfx}: bad scale`);
+    if (typeof p.color !== 'string' || !/^#[0-9a-fA-F]{6}$/.test(p.color)) errors.push(`${pfx}: bad color`);
+  }
+  if (recipe.attachmentPoints) {
+    for (const [name, pt] of Object.entries(recipe.attachmentPoints)) {
+      if (!isArray3(pt.pos)) errors.push(`attach.${name}: bad pos`);
+      if (!isArray3(pt.dir)) errors.push(`attach.${name}: bad dir`);
+    }
+  }
+  return errors;
+}
+
+// ─── THREE.JS SETUP ──────────────────────────────────────────────────────────
+
+const viewportEl = document.getElementById('viewport');
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(window.devicePixelRatio);
+renderer.setClearColor(0x1a1a2e);
+viewportEl.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(50, 1, 0.1, 2000);
+camera.position.set(40, 30, 60);
+
+const orbitControls = new OrbitControls(camera, renderer.domElement);
+orbitControls.enableDamping = true;
+orbitControls.dampingFactor = 0.1;
+
+const transformControls = new TransformControls(camera, renderer.domElement);
+scene.add(transformControls);
+transformControls.addEventListener('dragging-changed', e => {
+  orbitControls.enabled = !e.value;
+  if (e.value) {
+    // drag started
+    if (!state.isDragging) {
+      state.isDragging = true;
+      pushUndo();
+    }
+  } else {
+    // drag ended — read back values
+    state.isDragging = false;
+    readbackTransform();
+    refreshProperties();
+    refreshViewmodel();
+    runValidation();
+  }
+});
+
+transformControls.addEventListener('change', () => {
+  // live readback during drag for sidebar update
+  if (state.isDragging) {
+    readbackTransform();
+    refreshProperties();
+  }
+});
+
+// Lights — strong enough to make dark weapon colors (#2a2a2a etc.) clearly visible
+const ambientLight = new THREE.AmbientLight(0x8090b0, 1.0);
+scene.add(ambientLight);
+const dirLight = new THREE.DirectionalLight(0xffffff, 1.2);
+dirLight.position.set(50, 80, 40);
+scene.add(dirLight);
+const dirLight2 = new THREE.DirectionalLight(0xaaaacc, 0.6);
+dirLight2.position.set(-30, 20, -40);
+scene.add(dirLight2);
+const dirLight3 = new THREE.DirectionalLight(0x8888aa, 0.4);
+dirLight3.position.set(0, -30, 30);
+scene.add(dirLight3);
+
+// Grid + axes
+const gridHelper = new THREE.GridHelper(100, 100, 0x4a4a5a, 0x2a2a3a);
+scene.add(gridHelper);
+const axesHelper = new THREE.AxesHelper(10);
+scene.add(axesHelper);
+
+// Weapon and attachment groups
+const weaponGroup = new THREE.Group();
+scene.add(weaponGroup);
+const attachGroup = new THREE.Group();
+scene.add(attachGroup);
+let referenceGroup = null;
+
+// Raycaster
+const raycaster = new THREE.Raycaster();
+const pointer = new THREE.Vector2();
+
+// ─── MATERIAL CACHE ──────────────────────────────────────────────────────────
+
+const matCache = {};
+function getMat(hex, vertexColors) {
+  const key = hex + (vertexColors ? '_vc' : '');
+  if (!matCache[key]) {
+    matCache[key] = new THREE.MeshPhongMaterial({
+      color: vertexColors ? 0xffffff : hex,
+      flatShading: true,
+      vertexColors: vertexColors || false,
+    });
+  }
+  return matCache[key];
+}
+
+function applyBoxAO(geometry, ao, baseColor) {
+  const color = new THREE.Color(baseColor);
+  const count = geometry.getAttribute('position').count;
+  const colors = new Float32Array(count * 3);
+  const groups = geometry.groups;
+  for (let g = 0; g < groups.length; g++) {
+    const factor = ao[g] !== undefined ? ao[g] : 1.0;
+    const r = color.r * factor;
+    const gv = color.g * factor;
+    const b = color.b * factor;
+    const indices = geometry.getIndex();
+    const start = groups[g].start;
+    const gCount = groups[g].count;
+    for (let i = start; i < start + gCount; i++) {
+      const vi = indices ? indices.getX(i) : i;
+      colors[vi * 3] = r;
+      colors[vi * 3 + 1] = gv;
+      colors[vi * 3 + 2] = b;
+    }
+  }
+  geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+}
+
+// ─── MESH CREATION ───────────────────────────────────────────────────────────
+
+function createPrimitiveMesh(prim) {
+  let geometry;
+  const hasAO = prim.type === 'box' && prim.ao && prim.ao.length === 6;
+
+  if (prim.type === 'box') {
+    geometry = new THREE.BoxGeometry(prim.scale[0], prim.scale[1], prim.scale[2]);
+    if (hasAO) applyBoxAO(geometry, prim.ao, prim.color || '#3a3a3a');
+  } else if (prim.type === 'cylinder') {
+    geometry = new THREE.CylinderGeometry(prim.scale[0], prim.scale[0], prim.scale[2], 8);
+  } else {
+    return null;
+  }
+  const mesh = new THREE.Mesh(geometry, getMat(prim.color || '#3a3a3a', hasAO).clone());
+  mesh.position.set(prim.pos[0], prim.pos[1], prim.pos[2]);
+  mesh.rotation.set(prim.rot[0] * DEG2RAD, prim.rot[1] * DEG2RAD, prim.rot[2] * DEG2RAD);
+  mesh.userData.id = prim.id;
+  mesh.userData.group = prim.group;
+  mesh.userData.primType = prim.type;
+  mesh.name = prim.id;
+  return mesh;
+}
+
+function createAttachmentGizmo(name, point) {
+  const group = new THREE.Group();
+  group.userData.attachName = name;
+
+  // Cone
+  const coneGeo = new THREE.ConeGeometry(0.8, 3, 6);
+  const coneMat = new THREE.MeshPhongMaterial({ color: 0xf39c12, flatShading: true, emissive: 0xf39c12, emissiveIntensity: 0.15 });
+  const cone = new THREE.Mesh(coneGeo, coneMat);
+  group.add(cone);
+
+  // Direction arrow (thin cylinder)
+  const arrowGeo = new THREE.CylinderGeometry(0.15, 0.15, 5, 4);
+  const arrowMat = new THREE.MeshPhongMaterial({ color: 0xe74c3c, flatShading: true });
+  const arrow = new THREE.Mesh(arrowGeo, arrowMat);
+  arrow.position.y = 4; // offset above cone tip
+  group.add(arrow);
+
+  // Orient along dir
+  group.position.set(point.pos[0], point.pos[1], point.pos[2]);
+  const dir = new THREE.Vector3(point.dir[0], point.dir[1], point.dir[2]).normalize();
+  const q = new THREE.Quaternion();
+  q.setFromUnitVectors(new THREE.Vector3(0, 1, 0), dir);
+  group.quaternion.copy(q);
+
+  return group;
+}
+
+// ─── SCENE REBUILD ───────────────────────────────────────────────────────────
+
+function rebuildScene() {
+  // Clear weapon meshes
+  while (weaponGroup.children.length) weaponGroup.remove(weaponGroup.children[0]);
+  // Clear attachment gizmos
+  while (attachGroup.children.length) attachGroup.remove(attachGroup.children[0]);
+
+  // Detach transform controls
+  transformControls.detach();
+
+  // Build primitives
+  for (const prim of state.recipe.primitives) {
+    const mesh = createPrimitiveMesh(prim);
+    if (mesh) weaponGroup.add(mesh);
+  }
+
+  // Build attachment gizmos
+  if (state.recipe.attachmentPoints) {
+    for (const [name, point] of Object.entries(state.recipe.attachmentPoints)) {
+      const gizmo = createAttachmentGizmo(name, point);
+      attachGroup.add(gizmo);
+    }
+  }
+
+  // Re-select if applicable
+  if (state.selectedId) {
+    if (state.selectionType === 'primitive') {
+      selectPrimitive(state.selectedId, false);
+    } else {
+      selectAttachment(state.selectedId, false);
+    }
+  }
+}
+
+// ─── SELECTION ───────────────────────────────────────────────────────────────
+
+function deselectAll() {
+  // Restore materials
+  for (const mesh of weaponGroup.children) {
+    mesh.material.emissive && mesh.material.emissive.set(0x000000);
+    mesh.material.emissiveIntensity = 0;
+  }
+  for (const g of attachGroup.children) {
+    const cone = g.children[0];
+    if (cone) {
+      cone.material.emissiveIntensity = 0.15;
+    }
+  }
+  transformControls.detach();
+  state.selectedId = null;
+  state.selectionType = 'primitive';
+}
+
+function selectPrimitive(id, doRefresh = true) {
+  deselectAll();
+  const mesh = weaponGroup.children.find(m => m.userData.id === id);
+  if (!mesh) return;
+
+  state.selectedId = id;
+  state.selectionType = 'primitive';
+
+  // Highlight
+  mesh.material.emissive.set(0xf39c12);
+  mesh.material.emissiveIntensity = 0.15;
+
+  // Attach transform
+  transformControls.attach(mesh);
+  transformControls.setMode(state.transformMode);
+
+  if (doRefresh) refreshUI();
+}
+
+function selectAttachment(name, doRefresh = true) {
+  deselectAll();
+  const gizmo = attachGroup.children.find(g => g.userData.attachName === name);
+  if (!gizmo) return;
+
+  state.selectedId = name;
+  state.selectionType = 'attachment';
+
+  // Highlight cone
+  const cone = gizmo.children[0];
+  if (cone) {
+    cone.material.emissiveIntensity = 0.5;
+  }
+
+  // Only translate for attachment points
+  transformControls.attach(gizmo);
+  transformControls.setMode('translate');
+
+  if (doRefresh) refreshUI();
+}
+
+// ─── TRANSFORM READBACK ──────────────────────────────────────────────────────
+
+function readbackTransform() {
+  if (!state.selectedId) return;
+
+  if (state.selectionType === 'primitive') {
+    const mesh = weaponGroup.children.find(m => m.userData.id === state.selectedId);
+    if (!mesh) return;
+    const prim = state.recipe.primitives.find(p => p.id === state.selectedId);
+    if (!prim) return;
+
+    // Position
+    prim.pos = [
+      Math.round(mesh.position.x * 100) / 100,
+      Math.round(mesh.position.y * 100) / 100,
+      Math.round(mesh.position.z * 100) / 100
+    ];
+
+    // Rotation (radians -> degrees)
+    prim.rot = [
+      Math.round(mesh.rotation.x * RAD2DEG * 100) / 100,
+      Math.round(mesh.rotation.y * RAD2DEG * 100) / 100,
+      Math.round(mesh.rotation.z * RAD2DEG * 100) / 100
+    ];
+
+    // Scale: TransformControls modifies mesh.scale
+    if (state.transformMode === 'scale') {
+      prim.scale = [
+        Math.round(Math.abs(prim.scale[0] * mesh.scale.x) * 100) / 100 || 0.1,
+        Math.round(Math.abs(prim.scale[1] * mesh.scale.y) * 100) / 100 || 0.1,
+        Math.round(Math.abs(prim.scale[2] * mesh.scale.z) * 100) / 100 || 0.1
+      ];
+      // Recreate geometry with new scale, reset mesh.scale
+      const oldPos = mesh.position.clone();
+      const oldRot = mesh.rotation.clone();
+      let newGeo;
+      if (prim.type === 'box') {
+        newGeo = new THREE.BoxGeometry(prim.scale[0], prim.scale[1], prim.scale[2]);
+        if (prim.ao && prim.ao.length === 6) {
+          applyBoxAO(newGeo, prim.ao, prim.color || '#3a3a3a');
+        }
+      } else {
+        newGeo = new THREE.CylinderGeometry(prim.scale[0], prim.scale[0], prim.scale[2], 8);
+      }
+      mesh.geometry.dispose();
+      mesh.geometry = newGeo;
+      mesh.scale.set(1, 1, 1);
+      mesh.position.copy(oldPos);
+      mesh.rotation.copy(oldRot);
+    }
+  } else if (state.selectionType === 'attachment') {
+    const gizmo = attachGroup.children.find(g => g.userData.attachName === state.selectedId);
+    if (!gizmo || !state.recipe.attachmentPoints[state.selectedId]) return;
+
+    state.recipe.attachmentPoints[state.selectedId].pos = [
+      Math.round(gizmo.position.x * 100) / 100,
+      Math.round(gizmo.position.y * 100) / 100,
+      Math.round(gizmo.position.z * 100) / 100
+    ];
+  }
+}
+
+// ─── VIEWPORT CLICK ──────────────────────────────────────────────────────────
+
+function onViewportClick(event) {
+  if (state.isDragging) return;
+
+  // Don't select if clicking on TransformControls gizmo
+  if (transformControls.dragging) return;
+
+  const rect = renderer.domElement.getBoundingClientRect();
+  pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+  pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+
+  raycaster.setFromCamera(pointer, camera);
+
+  // Check weapon meshes first
+  const weaponHits = raycaster.intersectObjects(weaponGroup.children, false);
+  if (weaponHits.length > 0) {
+    selectPrimitive(weaponHits[0].object.userData.id);
+    return;
+  }
+
+  // Check attachment gizmos
+  const attachHits = raycaster.intersectObjects(attachGroup.children, true);
+  if (attachHits.length > 0) {
+    // Walk up to find the group with attachName
+    let obj = attachHits[0].object;
+    while (obj && !obj.userData.attachName) obj = obj.parent;
+    if (obj && obj.userData.attachName) {
+      selectAttachment(obj.userData.attachName);
+      return;
+    }
+  }
+
+  // Clicked empty space
+  deselectAll();
+  refreshUI();
+}
+
+renderer.domElement.addEventListener('pointerdown', e => {
+  // Store click position to distinguish click from drag
+  renderer.domElement._clickX = e.clientX;
+  renderer.domElement._clickY = e.clientY;
+});
+renderer.domElement.addEventListener('pointerup', e => {
+  const dx = e.clientX - (renderer.domElement._clickX || 0);
+  const dy = e.clientY - (renderer.domElement._clickY || 0);
+  if (Math.abs(dx) < 3 && Math.abs(dy) < 3) {
+    onViewportClick(e);
+  }
+});
+
+// ─── RESIZE ──────────────────────────────────────────────────────────────────
+
+function resize() {
+  const w = viewportEl.clientWidth;
+  const h = viewportEl.clientHeight;
+  renderer.setSize(w, h);
+  camera.aspect = w / h;
+  camera.updateProjectionMatrix();
+}
+new ResizeObserver(resize).observe(viewportEl);
+resize();
+
+// ─── ANIMATION LOOP ──────────────────────────────────────────────────────────
+
+function animate() {
+  requestAnimationFrame(animate);
+  orbitControls.update();
+  renderer.render(scene, camera);
+}
+animate();
+
+// ─── UI: POPULATE DROPDOWNS ──────────────────────────────────────────────────
+
+function populateDropdowns() {
+  const archSel = document.getElementById('meta-archetype');
+  archSel.innerHTML = '';
+  for (const a of VALID_ARCHETYPES) {
+    const opt = document.createElement('option');
+    opt.value = a;
+    opt.textContent = a;
+    archSel.appendChild(opt);
+  }
+
+  const groupFilter = document.getElementById('group-filter');
+  groupFilter.innerHTML = '<option value="all">All Groups</option>';
+  for (const g of VALID_GROUPS) {
+    const opt = document.createElement('option');
+    opt.value = g;
+    opt.textContent = g;
+    groupFilter.appendChild(opt);
+  }
+
+  const attachSel = document.getElementById('attach-add-select');
+  attachSel.innerHTML = '';
+  for (const a of VALID_ATTACHMENT_POINTS) {
+    const opt = document.createElement('option');
+    opt.value = a;
+    opt.textContent = a;
+    attachSel.appendChild(opt);
+  }
+
+  // Palette swatches
+  const paletteEl = document.getElementById('palette');
+  paletteEl.innerHTML = '';
+  for (const [name, hex] of Object.entries(WEAPON_COLORS)) {
+    const sw = document.createElement('div');
+    sw.className = 'swatch';
+    sw.style.background = hex;
+    sw.title = name;
+    sw.dataset.color = hex;
+    sw.addEventListener('click', () => applyColorToSelected(hex));
+    paletteEl.appendChild(sw);
+  }
+}
+
+// ─── UI: REFRESH ─────────────────────────────────────────────────────────────
+
+function refreshUI() {
+  refreshMetadata();
+  refreshPrimitivesList();
+  refreshProperties();
+  refreshAttachments();
+  refreshViewmodel();
+  refreshColorSection();
+  runValidation();
+}
+
+function refreshMetadata() {
+  document.getElementById('meta-name').value = state.recipe.name || '';
+  document.getElementById('meta-archetype').value = state.recipe.archetype || 'ar';
+}
+
+function refreshPrimitivesList() {
+  const list = document.getElementById('primitives-list');
+  const filter = document.getElementById('group-filter').value;
+  list.innerHTML = '';
+
+  for (const prim of state.recipe.primitives) {
+    if (filter !== 'all' && prim.group !== filter) continue;
+    const item = document.createElement('div');
+    item.className = 'prim-item' + (state.selectionType === 'primitive' && state.selectedId === prim.id ? ' selected' : '');
+    item.innerHTML = `<div class="prim-dot" style="background:${prim.color}"></div>` +
+      `<span class="prim-id">${prim.id}</span>` +
+      `<span class="prim-group">${prim.group}</span>`;
+    item.addEventListener('click', () => selectPrimitive(prim.id));
+    list.appendChild(item);
+  }
+}
+
+function refreshProperties() {
+  const panel = document.getElementById('properties');
+  const colorSection = document.getElementById('color-section');
+
+  if (!state.selectedId || state.selectionType !== 'primitive') {
+    panel.className = 'empty';
+    panel.textContent = 'No primitive selected';
+    colorSection.style.display = 'none';
+    return;
+  }
+
+  const prim = state.recipe.primitives.find(p => p.id === state.selectedId);
+  if (!prim) {
+    panel.className = 'empty';
+    panel.textContent = 'No primitive selected';
+    colorSection.style.display = 'none';
+    return;
+  }
+
+  colorSection.style.display = '';
+  panel.className = '';
+
+  panel.innerHTML = `
+    <div class="field-row">
+      <span class="field-label">ID</span>
+      <input type="text" id="prop-id" value="${prim.id}" style="flex:1">
+    </div>
+    <div class="field-row">
+      <span class="field-label">Grp</span>
+      <select id="prop-group" style="flex:1">
+        ${VALID_GROUPS.map(g => `<option value="${g}" ${g === prim.group ? 'selected' : ''}>${g}</option>`).join('')}
+      </select>
+    </div>
+    <div class="field-row">
+      <span class="field-label">Type</span>
+      <select id="prop-type" style="flex:1">
+        ${VALID_TYPES.map(t => `<option value="${t}" ${t === prim.type ? 'selected' : ''}>${t}</option>`).join('')}
+      </select>
+    </div>
+    <div class="xyz-row">
+      <span class="xyz-label">Pos</span>
+      <input type="number" id="prop-px" step="0.5" value="${prim.pos[0]}">
+      <input type="number" id="prop-py" step="0.5" value="${prim.pos[1]}">
+      <input type="number" id="prop-pz" step="0.5" value="${prim.pos[2]}">
+    </div>
+    <div class="xyz-row">
+      <span class="xyz-label">Rot</span>
+      <input type="number" id="prop-rx" step="1" value="${prim.rot[0]}">
+      <input type="number" id="prop-ry" step="1" value="${prim.rot[1]}">
+      <input type="number" id="prop-rz" step="1" value="${prim.rot[2]}">
+    </div>
+    <div class="xyz-row">
+      <span class="xyz-label">Scale</span>
+      <input type="number" id="prop-sx" step="0.5" min="0.1" value="${prim.scale[0]}">
+      <input type="number" id="prop-sy" step="0.5" min="0.1" value="${prim.scale[1]}">
+      <input type="number" id="prop-sz" step="0.5" min="0.1" value="${prim.scale[2]}">
+    </div>
+    <div class="btn-row" style="margin-top:6px">
+      <button class="small" id="btn-dup">Duplicate</button>
+      <button class="small danger" id="btn-del">Delete</button>
+    </div>
+  `;
+
+  // Color picker
+  document.getElementById('color-picker').value = prim.color;
+
+  // Bind property events
+  const bindProp = (elId, cb) => {
+    const el = document.getElementById(elId);
+    if (el) el.addEventListener('change', cb);
+  };
+
+  bindProp('prop-id', e => {
+    pushUndo();
+    const newId = e.target.value.trim();
+    if (newId && !state.recipe.primitives.some(p => p !== prim && p.id === newId)) {
+      prim.id = newId;
+      state.selectedId = newId;
+      // Update mesh name
+      const mesh = weaponGroup.children.find(m => m.userData.id !== newId);
+      // Rebuild to be safe
+      rebuildScene();
+      refreshPrimitivesList();
+    }
+  });
+
+  bindProp('prop-group', e => { pushUndo(); prim.group = e.target.value; rebuildScene(); refreshPrimitivesList(); });
+  bindProp('prop-type', e => {
+    pushUndo();
+    prim.type = e.target.value;
+    rebuildScene();
+  });
+
+  // XYZ numeric inputs
+  const bindXYZ = (prefix, field, rebuild = false) => {
+    ['x', 'y', 'z'].forEach((axis, i) => {
+      const el = document.getElementById(`${prefix}${axis}`);
+      if (!el) return;
+      el.addEventListener('change', () => {
+        pushUndo();
+        prim[field][i] = parseFloat(el.value) || 0;
+        if (rebuild) {
+          rebuildScene();
+        } else {
+          // Targeted mesh update
+          const mesh = weaponGroup.children.find(m => m.userData.id === prim.id);
+          if (mesh) {
+            if (field === 'pos') mesh.position.set(prim.pos[0], prim.pos[1], prim.pos[2]);
+            if (field === 'rot') mesh.rotation.set(prim.rot[0] * DEG2RAD, prim.rot[1] * DEG2RAD, prim.rot[2] * DEG2RAD);
+          }
+        }
+        runValidation();
+      });
+    });
+  };
+
+  bindXYZ('prop-p', 'pos');
+  bindXYZ('prop-r', 'rot');
+  bindXYZ('prop-s', 'scale', true); // Scale needs geometry rebuild
+
+  document.getElementById('btn-dup').addEventListener('click', () => duplicateSelected());
+  document.getElementById('btn-del').addEventListener('click', () => deleteSelected());
+}
+
+function refreshColorSection() {
+  if (!state.selectedId || state.selectionType !== 'primitive') return;
+  const prim = state.recipe.primitives.find(p => p.id === state.selectedId);
+  if (prim) {
+    document.getElementById('color-picker').value = prim.color;
+    // Highlight matching swatch
+    document.querySelectorAll('.swatch').forEach(sw => {
+      sw.classList.toggle('active', sw.dataset.color === prim.color);
+    });
+  }
+}
+
+function refreshAttachments() {
+  const list = document.getElementById('attachments-list');
+  list.innerHTML = '';
+
+  if (!state.recipe.attachmentPoints) return;
+
+  for (const [name, point] of Object.entries(state.recipe.attachmentPoints)) {
+    const item = document.createElement('div');
+    item.className = 'attach-item' + (state.selectionType === 'attachment' && state.selectedId === name ? ' selected' : '');
+
+    item.innerHTML = `
+      <div class="attach-header">
+        <span class="attach-name">${name}</span>
+        <button class="small danger" data-remove="${name}">X</button>
+      </div>
+      <div class="xyz-row">
+        <span class="xyz-label">Pos</span>
+        <input type="number" step="0.5" data-attach="${name}" data-field="pos" data-idx="0" value="${point.pos[0]}">
+        <input type="number" step="0.5" data-attach="${name}" data-field="pos" data-idx="1" value="${point.pos[1]}">
+        <input type="number" step="0.5" data-attach="${name}" data-field="pos" data-idx="2" value="${point.pos[2]}">
+      </div>
+      <div class="xyz-row">
+        <span class="xyz-label">Dir</span>
+        <input type="number" step="0.1" data-attach="${name}" data-field="dir" data-idx="0" value="${point.dir[0]}">
+        <input type="number" step="0.1" data-attach="${name}" data-field="dir" data-idx="1" value="${point.dir[1]}">
+        <input type="number" step="0.1" data-attach="${name}" data-field="dir" data-idx="2" value="${point.dir[2]}">
+      </div>
+    `;
+
+    // Click to select
+    item.querySelector('.attach-name').addEventListener('click', () => selectAttachment(name));
+
+    // Remove button
+    item.querySelector(`[data-remove="${name}"]`).addEventListener('click', () => {
+      pushUndo();
+      delete state.recipe.attachmentPoints[name];
+      if (state.selectedId === name) deselectAll();
+      rebuildScene();
+      refreshUI();
+    });
+
+    // Input changes
+    item.querySelectorAll('input[data-attach]').forEach(input => {
+      input.addEventListener('change', () => {
+        pushUndo();
+        const field = input.dataset.field;
+        const idx = parseInt(input.dataset.idx);
+        state.recipe.attachmentPoints[name][field][idx] = parseFloat(input.value) || 0;
+        rebuildScene();
+        runValidation();
+      });
+    });
+
+    list.appendChild(item);
+  }
+}
+
+function refreshViewmodel() {
+  const vm = state.recipe.viewmodel || { scale: 1, pos: [0,0,0], rot: [0,0,0] };
+  document.getElementById('vm-px').value = vm.pos ? vm.pos[0] : 0;
+  document.getElementById('vm-py').value = vm.pos ? vm.pos[1] : 0;
+  document.getElementById('vm-pz').value = vm.pos ? vm.pos[2] : 0;
+  document.getElementById('vm-rx').value = vm.rot ? vm.rot[0] : 0;
+  document.getElementById('vm-ry').value = vm.rot ? vm.rot[1] : 0;
+  document.getElementById('vm-rz').value = vm.rot ? vm.rot[2] : 0;
+  document.getElementById('vm-scale').value = vm.scale || 1;
+}
+
+function runValidation() {
+  const errors = validateRecipe(state.recipe);
+  const el = document.getElementById('validation-output');
+  if (errors.length === 0) {
+    el.className = 'val-ok';
+    el.textContent = `OK — ${state.recipe.primitives.length} primitives`;
+  } else {
+    el.className = 'val-err';
+    el.innerHTML = errors.map(e => `- ${e}`).join('<br>');
+  }
+}
+
+// ─── PRIMITIVE OPERATIONS ────────────────────────────────────────────────────
+
+function addPrimitive(type) {
+  pushUndo();
+  let idx = 1;
+  while (state.recipe.primitives.some(p => p.id === `${type}_${idx}`)) idx++;
+  const prim = {
+    id: `${type}_${idx}`,
+    group: 'receiver',
+    type,
+    pos: [0, 0, 0],
+    rot: [0, 0, 0],
+    scale: type === 'box' ? [5, 5, 5] : [1, 1, 5],
+    color: '#3a3a3a'
+  };
+  state.recipe.primitives.push(prim);
+  rebuildScene();
+  selectPrimitive(prim.id);
+}
+
+function deleteSelected() {
+  if (!state.selectedId || state.selectionType !== 'primitive') return;
+  pushUndo();
+  state.recipe.primitives = state.recipe.primitives.filter(p => p.id !== state.selectedId);
+  deselectAll();
+  rebuildScene();
+  refreshUI();
+}
+
+function duplicateSelected() {
+  if (!state.selectedId || state.selectionType !== 'primitive') return;
+  const src = state.recipe.primitives.find(p => p.id === state.selectedId);
+  if (!src) return;
+  pushUndo();
+  let newId = src.id + '_copy';
+  let idx = 2;
+  while (state.recipe.primitives.some(p => p.id === newId)) {
+    newId = src.id + '_copy' + idx++;
+  }
+  const dup = JSON.parse(JSON.stringify(src));
+  dup.id = newId;
+  dup.pos = [src.pos[0] + 2, src.pos[1], src.pos[2]];
+  state.recipe.primitives.push(dup);
+  rebuildScene();
+  selectPrimitive(newId);
+}
+
+function applyColorToSelected(hex) {
+  if (!state.selectedId || state.selectionType !== 'primitive') return;
+  const prim = state.recipe.primitives.find(p => p.id === state.selectedId);
+  if (!prim) return;
+  pushUndo();
+  prim.color = hex;
+  // Update mesh material
+  const mesh = weaponGroup.children.find(m => m.userData.id === prim.id);
+  if (mesh) {
+    mesh.material.color.set(hex);
+  }
+  refreshProperties();
+  refreshPrimitivesList();
+  refreshColorSection();
+  runValidation();
+}
+
+// ─── FILE I/O ────────────────────────────────────────────────────────────────
+
+function exportJSON() {
+  const json = JSON.stringify(state.recipe, null, 2);
+  const blob = new Blob([json], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = (state.recipe.name || 'weapon') + '.json';
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function importJSON(file) {
+  const reader = new FileReader();
+  reader.onload = () => {
+    try {
+      const recipe = JSON.parse(reader.result);
+      const errors = validateRecipe(recipe);
+      if (errors.length > 0) {
+        console.warn('Recipe validation warnings:', errors);
+      }
+      // Ensure required fields
+      if (!recipe.attachmentPoints) recipe.attachmentPoints = {};
+      if (!recipe.viewmodel) recipe.viewmodel = { scale: 1, pos: [0,0,0], rot: [0,0,0] };
+      if (!recipe.worldmodel) recipe.worldmodel = { scale: 0.4 };
+
+      pushUndo();
+      state.recipe = recipe;
+      state.selectedId = null;
+      rebuildScene();
+      refreshUI();
+      frameCameraOnWeapon();
+    } catch (e) {
+      alert('Failed to parse JSON: ' + e.message);
+    }
+  };
+  reader.readAsText(file);
+}
+
+function newRecipe() {
+  if (!confirm('Create new recipe? Current work will be lost if not exported.')) return;
+  pushUndo();
+  state.recipe = {
+    name: 'Untitled',
+    archetype: 'ar',
+    version: 1,
+    units: 'cm',
+    origin: 'receiver_center',
+    primitives: [
+      { id: 'body', group: 'receiver', type: 'box', pos: [0,0,0], rot: [0,0,0], scale: [5,5,20], color: '#3a3a3a' }
+    ],
+    attachmentPoints: {},
+    viewmodel: { scale: 1, pos: [0,0,0], rot: [0,0,0] },
+    worldmodel: { scale: 0.4 }
+  };
+  state.selectedId = null;
+  rebuildScene();
+  refreshUI();
+  frameCameraOnWeapon();
+}
+
+function importReference(files) {
+  const file = files[0];
+  if (!file) return;
+
+  if (file.name.match(/\.zip$/i)) {
+    importReferenceFromZip(file);
+  } else {
+    importReferenceFromGlb(file);
+  }
+}
+
+function importReferenceFromGlb(file) {
+  const reader = new FileReader();
+  reader.onload = () => {
+    const loader = new GLTFLoader();
+    loader.parse(reader.result, '', (gltf) => {
+      showReferenceModel(gltf.scene);
+    }, (err) => {
+      alert('Failed to load .glb: ' + (err.message || err));
+    });
+  };
+  reader.readAsArrayBuffer(file);
+}
+
+async function importReferenceFromZip(file) {
+  try {
+    const buf = await file.arrayBuffer();
+    const entries = await extractZipEntries(buf);
+
+    const fileMap = {};
+    let mainFile = null;
+
+    for (const entry of entries) {
+      const blob = new Blob([entry.data]);
+      const url = URL.createObjectURL(blob);
+      const name = entry.name.split('/').pop();
+      fileMap[name] = url;
+      if (name.match(/\.(gltf|glb)$/i) && !mainFile) mainFile = name;
+    }
+
+    if (!mainFile) {
+      for (const url of Object.values(fileMap)) URL.revokeObjectURL(url);
+      alert('No .gltf or .glb file found in zip.');
+      return;
+    }
+
+    const manager = new THREE.LoadingManager();
+    manager.setURLModifier(url => {
+      const filename = url.split('/').pop().split('\\').pop();
+      if (fileMap[filename]) return fileMap[filename];
+      const decoded = decodeURIComponent(filename);
+      if (fileMap[decoded]) return fileMap[decoded];
+      return url;
+    });
+
+    const loader = new GLTFLoader(manager);
+    loader.load(fileMap[mainFile], (gltf) => {
+      for (const url of Object.values(fileMap)) URL.revokeObjectURL(url);
+      showReferenceModel(gltf.scene);
+    }, undefined, (err) => {
+      for (const url of Object.values(fileMap)) URL.revokeObjectURL(url);
+      alert('Failed to load model from zip: ' + (err.message || err));
+    });
+  } catch (e) {
+    alert('Failed to read zip: ' + e.message);
+  }
+}
+
+async function extractZipEntries(buffer) {
+  const view = new DataView(buffer);
+  const entries = [];
+
+  let eocdOffset = -1;
+  for (let i = buffer.byteLength - 22; i >= 0; i--) {
+    if (view.getUint32(i, true) === 0x06054b50) { eocdOffset = i; break; }
+  }
+  if (eocdOffset < 0) throw new Error('Not a valid ZIP file');
+
+  const cdOffset = view.getUint32(eocdOffset + 16, true);
+  const cdCount = view.getUint16(eocdOffset + 10, true);
+
+  let pos = cdOffset;
+  for (let i = 0; i < cdCount; i++) {
+    if (view.getUint32(pos, true) !== 0x02014b50) break;
+
+    const method = view.getUint16(pos + 10, true);
+    const compSize = view.getUint32(pos + 20, true);
+    const nameLen = view.getUint16(pos + 28, true);
+    const extraLen = view.getUint16(pos + 30, true);
+    const commentLen = view.getUint16(pos + 32, true);
+    const localHeaderOffset = view.getUint32(pos + 42, true);
+
+    const nameBytes = new Uint8Array(buffer, pos + 46, nameLen);
+    const name = new TextDecoder().decode(nameBytes);
+
+    const localNameLen = view.getUint16(localHeaderOffset + 26, true);
+    const localExtraLen = view.getUint16(localHeaderOffset + 28, true);
+    const dataOffset = localHeaderOffset + 30 + localNameLen + localExtraLen;
+
+    if (!name.endsWith('/') && compSize > 0) {
+      const compData = new Uint8Array(buffer, dataOffset, compSize);
+
+      if (method === 0) {
+        entries.push({ name, data: compData });
+      } else if (method === 8 && typeof DecompressionStream !== 'undefined') {
+        const ds = new DecompressionStream('deflate-raw');
+        const writer = ds.writable.getWriter();
+        writer.write(compData);
+        writer.close();
+        const reader = ds.readable.getReader();
+        const chunks = [];
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          chunks.push(value);
+        }
+        const total = chunks.reduce((s, c) => s + c.length, 0);
+        const result = new Uint8Array(total);
+        let off = 0;
+        for (const c of chunks) { result.set(c, off); off += c.length; }
+        entries.push({ name, data: result });
+      }
+    }
+
+    pos += 46 + nameLen + extraLen + commentLen;
+  }
+
+  return entries;
+}
+
+function showReferenceModel(sceneRoot) {
+  if (referenceGroup) {
+    scene.remove(referenceGroup);
+    referenceGroup = null;
+  }
+  referenceGroup = sceneRoot;
+  referenceGroup.traverse(child => {
+    if (child.isMesh) {
+      child.material = new THREE.MeshPhongMaterial({
+        color: child.material.color || 0x888888,
+        flatShading: true,
+        transparent: true,
+        opacity: 0.15,
+        depthWrite: false
+      });
+    }
+  });
+
+  // If the recipe has sourceTransform, apply centroid + rotation + scale
+  // so the reference model aligns with the decomposed primitives.
+  const st = state.recipe.sourceTransform;
+  if (st && st.centroid && st.scaleFactor) {
+    const s = st.scaleFactor;
+    const c = st.centroid;
+
+    // Translate by -centroid, then apply 90° rotations, then scale
+    referenceGroup.matrixAutoUpdate = false;
+    const mat = new THREE.Matrix4();
+    mat.makeTranslation(-c[0], -c[1], -c[2]);
+
+    if (st.rotation) {
+      const DEG = Math.PI / 180;
+      const [rx, ry, rz] = st.rotation;
+      if (rx) { const r = new THREE.Matrix4().makeRotationX(rx * DEG); mat.premultiply(r); }
+      if (ry) { const r = new THREE.Matrix4().makeRotationY(ry * DEG); mat.premultiply(r); }
+      if (rz) { const r = new THREE.Matrix4().makeRotationZ(rz * DEG); mat.premultiply(r); }
+    }
+
+    const scaleMat = new THREE.Matrix4().makeScale(s, s, s);
+    mat.premultiply(scaleMat);
+    referenceGroup.matrix.copy(mat);
+  } else {
+    // Fallback: just scale to ~50cm extent
+    const box = new THREE.Box3().setFromObject(referenceGroup);
+    const size = new THREE.Vector3();
+    box.getSize(size);
+    const maxDim = Math.max(size.x, size.y, size.z);
+    if (maxDim > 0) {
+      const s = 50 / maxDim;
+      referenceGroup.scale.setScalar(s);
+    }
+  }
+
+  scene.add(referenceGroup);
+  state.referenceVisible = true;
+}
+
+// ─── CAMERA ──────────────────────────────────────────────────────────────────
+
+function frameCameraOnWeapon() {
+  if (weaponGroup.children.length === 0) return;
+  const box = new THREE.Box3().setFromObject(weaponGroup);
+  const center = new THREE.Vector3();
+  const size = new THREE.Vector3();
+  box.getCenter(center);
+  box.getSize(size);
+  const maxDim = Math.max(size.x, size.y, size.z);
+  const dist = maxDim * 1.5;
+
+  orbitControls.target.copy(center);
+  camera.position.set(center.x + dist * 0.6, center.y + dist * 0.4, center.z + dist * 0.8);
+  orbitControls.update();
+}
+
+function focusOnSelected() {
+  if (state.selectedId && state.selectionType === 'primitive') {
+    const mesh = weaponGroup.children.find(m => m.userData.id === state.selectedId);
+    if (mesh) {
+      orbitControls.target.copy(mesh.position);
+      orbitControls.update();
+      return;
+    }
+  }
+  if (state.selectedId && state.selectionType === 'attachment') {
+    const gizmo = attachGroup.children.find(g => g.userData.attachName === state.selectedId);
+    if (gizmo) {
+      orbitControls.target.copy(gizmo.position);
+      orbitControls.update();
+      return;
+    }
+  }
+  frameCameraOnWeapon();
+}
+
+function setCameraView(view) {
+  const box = new THREE.Box3().setFromObject(weaponGroup);
+  const center = new THREE.Vector3();
+  const size = new THREE.Vector3();
+  box.getCenter(center);
+  box.getSize(size);
+  const dist = Math.max(size.x, size.y, size.z) * 2;
+
+  orbitControls.target.copy(center);
+  switch (view) {
+    case 'front':
+      camera.position.set(center.x, center.y, center.z + dist);
+      break;
+    case 'side':
+      camera.position.set(center.x + dist, center.y, center.z);
+      break;
+    case 'top':
+      camera.position.set(center.x, center.y + dist, center.z);
+      break;
+  }
+  camera.lookAt(center);
+  orbitControls.update();
+}
+
+// Viewmodel preview
+let savedCameraState = null;
+
+function toggleViewmodelPreview() {
+  state.viewmodelPreview = !state.viewmodelPreview;
+  const btn = document.getElementById('btn-toggle-vm');
+
+  if (state.viewmodelPreview) {
+    btn.classList.add('active');
+    // Save camera state
+    savedCameraState = {
+      pos: camera.position.clone(),
+      target: orbitControls.target.clone()
+    };
+
+    // Setup viewmodel camera
+    const vm = state.recipe.viewmodel || { scale: 1, pos: [0,0,0], rot: [0,0,0] };
+    camera.position.set(0, 10, 30);
+    camera.lookAt(0, 0, -100);
+    orbitControls.target.set(0, 0, -100);
+    orbitControls.enabled = false;
+
+    // Move weapon to viewmodel position
+    const S = 1 / 100; // cm to meters-ish for preview
+    weaponGroup.position.set(
+      (vm.pos ? vm.pos[0] : 0) * S * 10,
+      (vm.pos ? vm.pos[1] : 0) * S * 10,
+      (vm.pos ? vm.pos[2] : 0) * S * 10
+    );
+    if (vm.rot) {
+      weaponGroup.rotation.set(vm.rot[0] * DEG2RAD, vm.rot[1] * DEG2RAD, vm.rot[2] * DEG2RAD);
+    }
+    if (vm.scale) weaponGroup.scale.setScalar(vm.scale);
+    attachGroup.visible = false;
+  } else {
+    btn.classList.remove('active');
+    // Restore
+    weaponGroup.position.set(0, 0, 0);
+    weaponGroup.rotation.set(0, 0, 0);
+    weaponGroup.scale.set(1, 1, 1);
+    attachGroup.visible = true;
+    orbitControls.enabled = true;
+
+    if (savedCameraState) {
+      camera.position.copy(savedCameraState.pos);
+      orbitControls.target.copy(savedCameraState.target);
+      savedCameraState = null;
+    }
+    orbitControls.update();
+  }
+}
+
+// ─── KEYBOARD SHORTCUTS ──────────────────────────────────────────────────────
+
+document.addEventListener('keydown', e => {
+  // Ignore when typing in inputs
+  if (e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT' || e.target.tagName === 'TEXTAREA') {
+    // But allow Ctrl+S and Ctrl+Z even in inputs
+    if (e.ctrlKey && e.key === 's') { e.preventDefault(); exportJSON(); }
+    if (e.ctrlKey && !e.shiftKey && e.key === 'z') { e.preventDefault(); undo(); }
+    if (e.ctrlKey && e.shiftKey && (e.key === 'z' || e.key === 'Z')) { e.preventDefault(); redo(); }
+    return;
+  }
+
+  // Snap toggle
+  if (e.key === 'Shift') {
+    transformControls.setTranslationSnap(0.5);
+    transformControls.setRotationSnap(5 * DEG2RAD);
+    transformControls.setScaleSnap(0.5);
+    return;
+  }
+
+  switch (e.key.toLowerCase()) {
+    case 'w':
+      state.transformMode = 'translate';
+      transformControls.setMode('translate');
+      document.getElementById('mode-indicator').textContent = 'TRANSLATE';
+      break;
+    case 'e':
+      state.transformMode = 'rotate';
+      transformControls.setMode('rotate');
+      document.getElementById('mode-indicator').textContent = 'ROTATE';
+      break;
+    case 'r':
+      state.transformMode = 'scale';
+      transformControls.setMode('scale');
+      document.getElementById('mode-indicator').textContent = 'SCALE';
+      break;
+    case 'delete':
+    case 'backspace':
+      deleteSelected();
+      break;
+    case 'd':
+      duplicateSelected();
+      break;
+    case 'g':
+      state.gridVisible = !state.gridVisible;
+      gridHelper.visible = state.gridVisible;
+      axesHelper.visible = state.gridVisible;
+      break;
+    case 'f':
+      focusOnSelected();
+      break;
+    case 'h':
+      if (referenceGroup) {
+        state.referenceVisible = !state.referenceVisible;
+        referenceGroup.visible = state.referenceVisible;
+      }
+      break;
+    case '1':
+      setCameraView('front');
+      break;
+    case '2':
+      setCameraView('side');
+      break;
+    case '3':
+      setCameraView('top');
+      break;
+  }
+
+  // Ctrl shortcuts
+  if (e.ctrlKey && e.key === 's') {
+    e.preventDefault();
+    exportJSON();
+  }
+  if (e.ctrlKey && !e.shiftKey && e.key === 'z') {
+    e.preventDefault();
+    undo();
+  }
+  if (e.ctrlKey && e.shiftKey && (e.key === 'z' || e.key === 'Z')) {
+    e.preventDefault();
+    redo();
+  }
+});
+
+document.addEventListener('keyup', e => {
+  if (e.key === 'Shift') {
+    transformControls.setTranslationSnap(null);
+    transformControls.setRotationSnap(null);
+    transformControls.setScaleSnap(null);
+  }
+});
+
+// ─── SIDEBAR EVENT BINDINGS ──────────────────────────────────────────────────
+
+// File buttons
+document.getElementById('btn-new').addEventListener('click', newRecipe);
+document.getElementById('btn-import').addEventListener('click', () => document.getElementById('file-import').click());
+document.getElementById('btn-export').addEventListener('click', exportJSON);
+document.getElementById('btn-import-ref').addEventListener('click', () => document.getElementById('file-import-ref').click());
+document.getElementById('btn-toggle-vm').addEventListener('click', toggleViewmodelPreview);
+
+// Rotate all primitives 90° around an axis
+function rotateAll(axis) {
+  const DEG = Math.PI / 180;
+  const cos = 0, sin = 1; // cos(90°)=0, sin(90°)=1
+  for (const p of state.recipe.primitives) {
+    const [x, y, z] = p.pos;
+    // Rotate position
+    if (axis === 'x') { p.pos = [x, -z, y]; }
+    else if (axis === 'y') { p.pos = [z, y, -x]; }
+    else { p.pos = [-y, x, z]; }
+    // Round positions
+    p.pos = p.pos.map(v => Math.round(v * 100) / 100);
+
+    // Rotate the primitive's own orientation
+    const [rx, ry, rz] = p.rot;
+    if (axis === 'x') { p.rot = [rx + 90, ry, rz]; }
+    else if (axis === 'y') { p.rot = [rx, ry + 90, rz]; }
+    else { p.rot = [rx, ry, rz + 90]; }
+    // Normalize to 0-359
+    p.rot = p.rot.map(v => ((v % 360) + 360) % 360);
+    // Round
+    p.rot = p.rot.map(v => Math.round(v * 10) / 10);
+
+    // For box scale, rotate the extents to match
+    if (p.type === 'box' && (p.rot[0] % 90 === 0) && (p.rot[1] % 90 === 0) && (p.rot[2] % 90 === 0)) {
+      const [sx, sy, sz] = p.scale;
+      if (axis === 'x') { p.scale = [sx, sz, sy]; }
+      else if (axis === 'y') { p.scale = [sz, sy, sx]; }
+      else { p.scale = [sy, sx, sz]; }
+      // Reset rotation for axis-aligned boxes
+      p.rot = [0, 0, 0];
+    }
+  }
+  // Also rotate attachment points if present
+  if (state.recipe.attachmentPoints) {
+    for (const [name, pt] of Object.entries(state.recipe.attachmentPoints)) {
+      const [x, y, z] = pt.pos;
+      if (axis === 'x') { pt.pos = [x, -z, y]; }
+      else if (axis === 'y') { pt.pos = [z, y, -x]; }
+      else { pt.pos = [-y, x, z]; }
+      pt.pos = pt.pos.map(v => Math.round(v * 100) / 100);
+    }
+  }
+  // Update sourceTransform rotation
+  if (state.recipe.sourceTransform) {
+    const st = state.recipe.sourceTransform;
+    if (!st.rotation) st.rotation = [0, 0, 0];
+    if (axis === 'x') st.rotation[0] = (st.rotation[0] + 90) % 360;
+    else if (axis === 'y') st.rotation[1] = (st.rotation[1] + 90) % 360;
+    else st.rotation[2] = (st.rotation[2] + 90) % 360;
+  }
+  rebuildScene();
+  refreshPrimitivesList();
+}
+
+document.getElementById('btn-rot-x').addEventListener('click', () => rotateAll('x'));
+document.getElementById('btn-rot-y').addEventListener('click', () => rotateAll('y'));
+document.getElementById('btn-rot-z').addEventListener('click', () => rotateAll('z'));
+
+// File inputs
+document.getElementById('file-import').addEventListener('change', e => {
+  if (e.target.files[0]) importJSON(e.target.files[0]);
+  e.target.value = '';
+});
+document.getElementById('file-import-ref').addEventListener('change', e => {
+  if (e.target.files.length > 0) importReference(e.target.files);
+  e.target.value = '';
+});
+
+// Metadata
+document.getElementById('meta-name').addEventListener('change', e => {
+  pushUndo();
+  state.recipe.name = e.target.value.trim() || 'Untitled';
+});
+document.getElementById('meta-archetype').addEventListener('change', e => {
+  pushUndo();
+  state.recipe.archetype = e.target.value;
+});
+
+// Group filter
+document.getElementById('group-filter').addEventListener('change', refreshPrimitivesList);
+
+// Add primitives
+document.getElementById('btn-add-box').addEventListener('click', () => addPrimitive('box'));
+document.getElementById('btn-add-cyl').addEventListener('click', () => addPrimitive('cylinder'));
+
+// Color picker
+document.getElementById('color-picker').addEventListener('input', e => {
+  if (!state.selectedId || state.selectionType !== 'primitive') return;
+  const prim = state.recipe.primitives.find(p => p.id === state.selectedId);
+  if (!prim) return;
+  pushUndo();
+  prim.color = e.target.value;
+  const mesh = weaponGroup.children.find(m => m.userData.id === prim.id);
+  if (mesh) mesh.material.color.set(prim.color);
+  refreshPrimitivesList();
+  refreshColorSection();
+});
+
+// Apply color to group
+document.getElementById('btn-apply-group-color').addEventListener('click', () => {
+  if (!state.selectedId || state.selectionType !== 'primitive') return;
+  const prim = state.recipe.primitives.find(p => p.id === state.selectedId);
+  if (!prim) return;
+  pushUndo();
+  const color = prim.color;
+  const group = prim.group;
+  for (const p of state.recipe.primitives) {
+    if (p.group === group) p.color = color;
+  }
+  rebuildScene();
+  refreshPrimitivesList();
+});
+
+// Add attachment point
+document.getElementById('btn-add-attach').addEventListener('click', () => {
+  const name = document.getElementById('attach-add-select').value;
+  if (!name) return;
+  if (!state.recipe.attachmentPoints) state.recipe.attachmentPoints = {};
+  if (state.recipe.attachmentPoints[name]) {
+    alert(`Attachment point "${name}" already exists.`);
+    return;
+  }
+  pushUndo();
+  state.recipe.attachmentPoints[name] = { pos: [0, 0, 0], dir: [0, 1, 0] };
+  rebuildScene();
+  refreshAttachments();
+  runValidation();
+});
+
+// Viewmodel inputs
+['vm-px','vm-py','vm-pz','vm-rx','vm-ry','vm-rz','vm-scale'].forEach(id => {
+  document.getElementById(id).addEventListener('change', () => {
+    pushUndo();
+    if (!state.recipe.viewmodel) state.recipe.viewmodel = { scale: 1, pos: [0,0,0], rot: [0,0,0] };
+    const vm = state.recipe.viewmodel;
+    if (!vm.pos) vm.pos = [0,0,0];
+    if (!vm.rot) vm.rot = [0,0,0];
+    vm.pos[0] = parseFloat(document.getElementById('vm-px').value) || 0;
+    vm.pos[1] = parseFloat(document.getElementById('vm-py').value) || 0;
+    vm.pos[2] = parseFloat(document.getElementById('vm-pz').value) || 0;
+    vm.rot[0] = parseFloat(document.getElementById('vm-rx').value) || 0;
+    vm.rot[1] = parseFloat(document.getElementById('vm-ry').value) || 0;
+    vm.rot[2] = parseFloat(document.getElementById('vm-rz').value) || 0;
+    vm.scale = parseFloat(document.getElementById('vm-scale').value) || 1;
+  });
+});
+
+// ─── INIT ────────────────────────────────────────────────────────────────────
+
+async function init() {
+  populateDropdowns();
+
+  // Check for ?recipe= query param
+  const params = new URLSearchParams(location.search);
+  const recipePath = params.get('recipe');
+
+  if (recipePath) {
+    try {
+      const resp = await fetch(recipePath);
+      const recipe = await resp.json();
+      if (!recipe.attachmentPoints) recipe.attachmentPoints = {};
+      if (!recipe.viewmodel) recipe.viewmodel = { scale: 1, pos: [0,0,0], rot: [0,0,0] };
+      if (!recipe.worldmodel) recipe.worldmodel = { scale: 0.4 };
+      state.recipe = recipe;
+    } catch (e) {
+      console.warn('Failed to load recipe from URL, using default:', e);
+      state.recipe = JSON.parse(JSON.stringify(DEFAULT_RECIPE));
+    }
+  } else {
+    state.recipe = JSON.parse(JSON.stringify(DEFAULT_RECIPE));
+  }
+
+  rebuildScene();
+  refreshUI();
+  frameCameraOnWeapon();
+}
+
+init();
+</script>
+</body>
+</html>
